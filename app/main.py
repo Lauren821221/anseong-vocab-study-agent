@@ -1,380 +1,129 @@
-import requests
-import streamlit as st
+import requests, streamlit as st
+from config import API_BASE_URL
+from utils.state_manager import init_state, reset_main
+from components.history import render_history
 
-from components.sidebar import render_sidebar
-from utils.state_manager import init_session_state, reset_session_state
-from config import get_api_base_url
+st.set_page_config(page_title="안성맞춤 수준별 단어 스터디",page_icon="📚",layout="wide")
+init_state()
 
+st.markdown("""
+<style>
+.block-container{max-width:1100px;padding-top:2rem}.stButton>button{border-radius:10px}
+div[data-testid="stFileUploader"]{border-radius:14px}
+</style>""",unsafe_allow_html=True)
 
-API_BASE_URL = get_api_base_url()
+with st.sidebar:
+    st.title("📚 안성맞춤 단어 스터디")
+    st.caption("수준과 학습 자료를 분석해 나에게 맞는 영어 문제를 만듭니다.")
+    if st.button("＋ 새 학습 시작",use_container_width=True):
+        reset_main(); st.rerun()
+    render_history()
 
+st.title("안성맞춤 수준별 단어 스터디 에이전트")
+st.caption("공부한 자료를 올리면 AI가 분석하고, 원하는 유형과 난이도로 문제를 만들어 드려요.")
 
-def analyze_material(file_obj):
-    files = {
-        "file": (
-            file_obj.name,
-            file_obj.getvalue(),
-            file_obj.type or "image/jpeg",
-        )
-    }
-    data = {"learner_level": st.session_state.learner_level}
+levels=["유치원","초등 저학년","초등 고학년","중학생","고등학생","성인"]
+difficulties=["쉬움","보통","어려움","TOSEL 수준","TOEFL Junior 수준","TOEFL 수준","최선어학원 유형"]
 
-    response = requests.post(
-        f"{API_BASE_URL}/study/analyze",
-        files=files,
-        data=data,
-        timeout=180,
-    )
-    response.raise_for_status()
-    return response.json()
+st.subheader("① 공부한 자료 올리기")
+st.caption("사진 파일을 선택하거나 카메라로 바로 촬영하세요. 새 학습 시작 시 메인 화면만 초기화되고 학습 이력은 유지됩니다.")
+c1,c2=st.columns(2)
+with c1:
+    upload=st.file_uploader("사진 파일 선택",type=["jpg","jpeg","png","webp","heic","heif"],key=f"file_{st.session_state.upload_nonce}")
+with c2:
+    camera=st.camera_input("카메라로 촬영",key=f"cam_{st.session_state.upload_nonce}")
+image=camera or upload
 
+st.subheader("② 학습자 수준 · 문제 난이도 · 문제 수")
+a,b,c=st.columns(3)
+with a: level=st.selectbox("학습자 수준",levels,index=1)
+with b: difficulty=st.selectbox("문제 난이도 / 시험 유형",difficulties,index=1)
+with c: count=st.selectbox("문제 수",[5,10,15,20,25,30],index=1,format_func=lambda x:f"{x}문제")
 
-def generate_quiz():
-    analysis = st.session_state.analysis
-    payload = {
-        "learner_level": st.session_state.learner_level,
-        "analysis": analysis,
-        "problem_types": st.session_state.selected_problem_types,
-        "question_count": st.session_state.question_count,
-    }
+if image and st.button("🔎 자료 분석하고 AI 추천 받기",type="primary"):
+    try:
+        with st.spinner("사진에서 학습 단어를 분석하고 있어요..."):
+            files={"file":(image.name,image.getvalue(),image.type or "image/jpeg")}
+            r=requests.post(f"{API_BASE_URL}/analyze",files=files,data={"learner_level":level},timeout=120); r.raise_for_status()
+            st.session_state.analysis=r.json()
+            st.session_state.material_title=st.session_state.analysis.get("title","학습 자료")
+            rr=requests.post(f"{API_BASE_URL}/recommend",json={"learner_level":level,"difficulty":difficulty,"words":st.session_state.analysis.get("words",[])},timeout=60); rr.raise_for_status()
+            st.session_state.recommendation=rr.json()
+            st.session_state.selected_types=st.session_state.recommendation.get("recommended_type_ids",[])
+            st.session_state.questions=[]; st.session_state.grade=None
+    except Exception as e: st.error(f"자료 분석 오류: {e}")
 
-    response = requests.post(
-        f"{API_BASE_URL}/study/generate",
-        json=payload,
-        timeout=180,
-    )
-    response.raise_for_status()
-    st.session_state.quiz = response.json()
-    st.session_state.answers = {}
-    st.session_state.app_mode = "quiz"
-    st.rerun()
+if st.session_state.analysis:
+    st.success(f"자료 분석 완료: {st.session_state.analysis.get('summary','')}")
+    words=st.session_state.analysis.get("words",[])
+    edited=st.text_area("추출된 단어 확인/편집 (쉼표로 구분)",value=", ".join(x.get("word","") for x in words),height=90)
+    edited_words=[x.strip() for x in edited.split(",") if x.strip()]
+    st.session_state.analysis["words"]=[{"word":x,"meaning":""} for x in edited_words]
 
+    st.subheader("③ AI 에이전트 추천 → 사용자가 최종 선택")
+    rec=st.session_state.recommendation or {}
+    st.info("✨ "+rec.get("reason","학습 수준과 난이도를 기준으로 추천했습니다."))
+    try:
+        qt=requests.get(f"{API_BASE_URL}/question-types",timeout=10).json()
+    except Exception: qt=[]
+    selected=[]
+    cols=st.columns(2)
+    rec_ids=set(rec.get("recommended_type_ids",[]))
+    for i,t in enumerate(qt):
+        with cols[i%2]:
+            checked=st.checkbox(f"{t['name']} — {t['description']}",value=t["id"] in rec_ids,key=f"type_{t['id']}")
+            if checked: selected.append(t["id"])
+    st.session_state.selected_types=selected
 
-def grade_quiz():
-    payload = {
-        "learner_level": st.session_state.learner_level,
-        "quiz": st.session_state.quiz,
-        "answers": st.session_state.answers,
-        "source_name": st.session_state.uploaded_filename,
-    }
+    if level=="유치원":
+        st.caption("💡 유치원은 뜻·그림/상황·짧은 예문 중심을 우선 추천하며, 생성 문제도 짧고 구체적인 문장으로 조정합니다.")
 
-    response = requests.post(
-        f"{API_BASE_URL}/study/grade",
-        json=payload,
-        timeout=180,
-    )
-    response.raise_for_status()
-    st.session_state.grading = response.json()
-    st.session_state.app_mode = "result"
-    st.rerun()
-
-
-def generate_kindergarten_examples():
-    payload = {
-        "learner_level": "유치원",
-        "analysis": st.session_state.analysis,
-    }
-
-    response = requests.post(
-        f"{API_BASE_URL}/study/kindergarten-examples",
-        json=payload,
-        timeout=180,
-    )
-    response.raise_for_status()
-    st.session_state.kindergarten_examples = response.json()
-    st.session_state.app_mode = "kindergarten"
-    st.rerun()
-
-
-def render_upload():
-    st.header("1️⃣ 공부한 영어 자료 올리기")
-
-    st.write(
-        "단어장, 교재, 프린트, 노트 등을 사진으로 올리거나 "
-        "카메라로 바로 촬영할 수 있어요."
-    )
-
-    tab1, tab2 = st.tabs(["📁 파일 업로드", "📷 카메라 촬영"])
-
-    with tab1:
-        uploaded = st.file_uploader(
-            "이미지 파일 선택",
-            type=["png", "jpg", "jpeg", "webp"],
-            key="file_upload",
-        )
-
-    with tab2:
-        camera = st.camera_input("공부한 자료 촬영")
-
-    file_obj = camera or uploaded
-
-    if file_obj:
-        st.image(file_obj, caption="업로드한 학습 자료", width=500)
-
-        if st.button("🔍 자료 분석하기", type="primary"):
-            try:
-                with st.spinner("자료에서 단어와 학습 내용을 분석하고 있어요..."):
-                    result = analyze_material(file_obj)
-
-                st.session_state.analysis = result
-                st.session_state.uploaded_filename = getattr(
-                    file_obj, "name", "camera.jpg"
-                )
-                st.session_state.app_mode = "proposal"
-                st.rerun()
-
-            except requests.RequestException as e:
-                st.error("분석 서버 호출에 실패했습니다.")
-                st.exception(e)
-
-
-def render_proposal():
-    analysis = st.session_state.analysis or {}
-
-    st.header("2️⃣ 분석 결과와 추천 학습 방식")
-
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.subheader("추출된 핵심 단어")
-        words = analysis.get("extracted_words", [])
-        if words:
-            st.write(", ".join(words))
-        else:
-            st.info("추출된 단어가 없습니다.")
-
-        st.subheader("자료 난이도 분석")
-        st.write(analysis.get("difficulty_summary", "-"))
-
-    with col2:
-        st.subheader("에이전트의 추천")
-        st.write(analysis.get("study_advice", "-"))
-
-    if st.session_state.learner_level == "유치원":
-        st.info(
-            "유치원 학습자는 시험보다 문장 노출이 중요하므로 "
-            "같은 단어를 기초·기본·중급·상급 예문으로 확장해 드려요."
-        )
-
-        if st.button("🌱 수준별 예문 만들기", type="primary"):
-            try:
-                with st.spinner("수준별 예문을 만들고 있어요..."):
-                    generate_kindergarten_examples()
-            except requests.RequestException as e:
-                st.error("예문 생성에 실패했습니다.")
-                st.exception(e)
-        return
-
-    recommendations = analysis.get("recommended_problem_types", [])
-
-    if recommendations:
-        option_map = {
-            item["id"]: f"{item['name']} — {item['reason']}"
-            for item in recommendations
-        }
-
-        default_ids = [item["id"] for item in recommendations[:3]]
-
-        selected = st.multiselect(
-            "출제할 문제 유형을 선택하세요.",
-            options=list(option_map.keys()),
-            default=default_ids,
-            format_func=lambda x: option_map[x],
-        )
-
-        st.session_state.selected_problem_types = selected
-    else:
-        st.warning("추천 문제 유형이 없습니다.")
-        st.session_state.selected_problem_types = []
-
-    st.slider(
-        "문제 수",
-        min_value=5,
-        max_value=25,
-        value=10,
-        step=5,
-        key="question_count",
-    )
-
-    if st.button(
-        "✏️ 선택한 유형으로 문제 만들기",
-        type="primary",
-        disabled=not st.session_state.selected_problem_types,
-    ):
+    if st.button("선택한 조건으로 문제 만들기 →",type="primary",disabled=not selected):
         try:
-            with st.spinner("학습 자료와 수준을 반영해 문제를 만들고 있어요..."):
-                generate_quiz()
-        except requests.RequestException as e:
-            st.error("문제 생성에 실패했습니다.")
-            st.exception(e)
+            with st.spinner(f"{count}문제를 만들고 있어요..."):
+                payload={"learner_level":level,"difficulty":difficulty,"words":st.session_state.analysis["words"],"type_ids":selected,"question_count":count}
+                r=requests.post(f"{API_BASE_URL}/quiz",json=payload,timeout=180); r.raise_for_status()
+                st.session_state.questions=r.json().get("questions",[])
+                st.session_state.answers={}; st.session_state.grade=None
+        except Exception as e: st.error(f"문제 생성 오류: {e}")
 
-
-def render_quiz():
-    quiz = st.session_state.quiz or {}
-    questions = quiz.get("questions", [])
-
-    st.header("3️⃣ 안성맞춤 영어 문제")
-
-    st.caption(
-        f"수준: {st.session_state.learner_level} · "
-        f"총 {len(questions)}문제"
-    )
-
-    for idx, q in enumerate(questions, start=1):
-        with st.container(border=True):
-            st.markdown(f"**{idx}. {q['question']}**")
-
-            qid = q["id"]
-            qtype = q.get("question_type", "multiple_choice")
-
-            if qtype == "multiple_choice":
-                st.session_state.answers[qid] = st.radio(
-                    "답 선택",
-                    q.get("options", []),
-                    key=f"answer_{qid}",
-                    index=None,
-                )
+if st.session_state.questions:
+    st.divider(); st.subheader("④ 문제 풀기")
+    with st.form("quiz_form"):
+        answers={}
+        for q in st.session_state.questions:
+            st.markdown(f"**{q['id']}. [{q.get('type_name','')}] {q['question']}**")
+            if q.get("format")=="short_answer":
+                answers[str(q["id"])]=st.text_input("답",key=f"a_{q['id']}")
             else:
-                st.session_state.answers[qid] = st.text_input(
-                    "답 입력",
-                    key=f"answer_{qid}",
-                )
-
-            if q.get("target_word"):
-                st.caption(f"학습 단어: {q['target_word']}")
-
-    if st.button("✅ 채점하기", type="primary"):
-        unanswered = [
-            q["id"]
-            for q in questions
-            if not st.session_state.answers.get(q["id"])
-        ]
-
-        if unanswered:
-            st.warning("아직 답하지 않은 문제가 있어요.")
-            return
-
+                choices=q.get("choices",[])
+                answers[str(q["id"])]=st.radio("정답 선택",["선택 안 함"]+choices,index=0,key=f"a_{q['id']}")
+            st.write("")
+        submitted=st.form_submit_button("채점하기",type="primary")
+    if submitted:
+        answers={k:("" if v=="선택 안 함" else v) for k,v in answers.items()}
         try:
             with st.spinner("채점하고 복습 단어를 분석하고 있어요..."):
-                grade_quiz()
-        except requests.RequestException as e:
-            st.error("채점 요청에 실패했습니다.")
-            st.exception(e)
+                payload={"learner_level":level,"difficulty":difficulty,"title":st.session_state.material_title,
+                         "words":st.session_state.analysis["words"],"type_ids":st.session_state.selected_types,
+                         "questions":st.session_state.questions,"answers":answers}
+                r=requests.post(f"{API_BASE_URL}/grade",json=payload,timeout=180); r.raise_for_status()
+                st.session_state.grade=r.json()
+        except Exception as e: st.error(f"채점 오류: {e}")
 
-
-def render_result():
-    result = st.session_state.grading or {}
-
-    st.header("4️⃣ 채점 및 맞춤 복습")
-
-    score = result.get("score", 0)
-    total = result.get("total", 0)
-    accuracy = result.get("accuracy", 0)
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("점수", f"{score}/{total}")
-    c2.metric("정답률", f"{accuracy}%")
-    c3.metric("학습 수준", st.session_state.learner_level)
-
-    st.subheader("문제별 결과")
-    for item in result.get("details", []):
-        icon = "✅" if item.get("correct") else "❌"
-        with st.container(border=True):
-            st.write(
-                f"{icon} {item.get('question', '')}"
-            )
-            st.caption(
-                f"내 답: {item.get('user_answer', '-')} | "
-                f"정답: {item.get('correct_answer', '-')}"
-            )
-            if item.get("explanation"):
-                st.write("해설:", item["explanation"])
-
-    st.subheader("🎯 더 공부해야 할 단어")
-    weak_words = result.get("weak_words", [])
-    if weak_words:
-        st.write(", ".join(weak_words))
-    else:
-        st.success("이번 문제에서는 특별히 보완할 단어가 없어요.")
-
-    st.subheader("🔗 같이 공부하면 좋은 단어")
-    related = result.get("related_words", [])
-    for item in related:
-        with st.container(border=True):
-            st.markdown(
-                f"**{item.get('word')}** — {item.get('meaning', '')}"
-            )
-            st.caption(
-                f"함께 공부하는 이유: {item.get('reason', '')}"
-            )
-
-    if result.get("study_plan"):
-        st.subheader("📌 다음 학습 제안")
-        st.write(result["study_plan"])
-
-    if st.button("🔄 새로운 자료로 다시 공부하기"):
-        reset_session_state()
-        st.rerun()
-
-
-def render_kindergarten():
-    data = st.session_state.kindergarten_examples or {}
-
-    st.header("🌱 유치원 수준별 예문")
-
-    for word_item in data.get("words", []):
-        with st.container(border=True):
-            st.subheader(
-                f"{word_item.get('word')} "
-                f"({word_item.get('meaning', '')})"
-            )
-
-            examples = word_item.get("examples", {})
-            for level in ["기초", "기본", "중급", "상급"]:
-                ex = examples.get(level)
-                if ex:
-                    st.markdown(f"**{level}**")
-                    st.write(ex.get("english", ""))
-                    st.caption(ex.get("korean", ""))
-
-    if data.get("parent_tip"):
-        st.info(data["parent_tip"])
-
-    if st.button("🔄 다른 자료 공부하기"):
-        reset_session_state()
-        st.rerun()
-
-
-def main():
-    st.set_page_config(
-        page_title="안성맞춤 수준별 단어 스터디 에이전트",
-        page_icon="📚",
-        layout="wide",
-    )
-
-    init_session_state()
-    render_sidebar()
-
-    st.title("📚 안성맞춤 수준별 단어 스터디 에이전트")
-    st.write(
-        "내가 공부한 영어 자료를 올리면, "
-        "학습자 수준에 맞는 문제를 제안하고 출제·채점한 뒤 "
-        "다음에 공부할 단어까지 추천해주는 AI 학습 에이전트입니다."
-    )
-
-    mode = st.session_state.app_mode
-
-    if mode == "upload":
-        render_upload()
-    elif mode == "proposal":
-        render_proposal()
-    elif mode == "quiz":
-        render_quiz()
-    elif mode == "result":
-        render_result()
-    elif mode == "kindergarten":
-        render_kindergarten()
-
-
-if __name__ == "__main__":
-    main()
+if st.session_state.grade:
+    g=st.session_state.grade
+    st.divider(); st.subheader("⑤ 채점 · 복습")
+    st.metric("점수",f"{g['score']}점",f"{g['correct_count']}/{g['total']} 정답")
+    if g.get("weak_words"):
+        st.warning("더 공부하면 좋은 단어: "+", ".join(g["weak_words"]))
+    if g.get("review"):
+        st.markdown("#### 함께 공부하면 좋은 단어")
+        for x in g["review"]:
+            st.markdown(f"**{x['word']}** — {x.get('why','')}\n\n→ {', '.join(x.get('related_words',[]))}")
+    with st.expander("문항별 정답 확인"):
+        qmap={q["id"]:q for q in st.session_state.questions}
+        for d in g.get("details",[]):
+            q=qmap.get(d["id"],{})
+            st.markdown(f"{'✅' if d['correct'] else '❌'} **{d['id']}번** · 내 답: {d.get('user_answer','')} · 정답/예시: {d.get('answer','')}")
+            if q.get("explanation"): st.caption(q["explanation"])

@@ -1,39 +1,19 @@
-import requests
-import streamlit as st
+import requests, streamlit as st
+from config import API_BASE_URL
 
-from utils.state_manager import reset_session_state
-from config import get_api_base_url
-
-
-API_BASE_URL = get_api_base_url()
-
-
-def fetch_history():
+def render_history():
+    st.markdown("#### 🕘 학습 이력")
     try:
-        response = requests.get(f"{API_BASE_URL}/history/", timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException:
-        return []
-
-
-def render_history_ui():
-    st.subheader("📚 학습 이력")
-
-    history = fetch_history()
-
-    if not history:
-        st.info("저장된 학습 이력이 없습니다.")
+        r=requests.get(f"{API_BASE_URL}/history",timeout=10); r.raise_for_status()
+        rows=r.json()
+    except Exception:
+        st.caption("학습 이력을 불러오지 못했습니다.")
         return
-
-    for item in history:
-        with st.container(border=True):
-            st.markdown(f"**{item['learner_level']} | {item['created_at']}**")
-            st.caption(
-                f"자료: {item.get('source_name') or '-'} · "
-                f"점수: {item.get('score', 0)}/{item.get('total', 0)}"
-            )
-
-            weak_words = item.get("weak_words", [])
-            if weak_words:
-                st.write("보완 단어:", ", ".join(weak_words[:8]))
+    if not rows:
+        st.caption("아직 저장된 학습 이력이 없어요.")
+    for x in rows[:20]:
+        label=f"{x['learner_level']} · {x['title']}"
+        with st.expander(label):
+            st.caption(f"{x['difficulty']} · {x['question_count']}문제 · {x['score']}점")
+            if x.get("result",{}).get("weak_words"):
+                st.write("복습 단어:", ", ".join(x["result"]["weak_words"]))

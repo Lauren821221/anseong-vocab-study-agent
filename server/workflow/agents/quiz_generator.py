@@ -1,45 +1,48 @@
-from server.utils.config import generate_text
-from server.utils.json_utils import extract_json
-
+from server.utils.config import generate_json
+from server.workflow.catalog import QUESTION_TYPES
 
 class QuizGeneratorAgent:
-    def run(self, state):
-        prompt = f"""
-학습자 수준: {state['learner_level']}
-문제 수: {state['question_count']}
-선택한 문제 유형: {state['problem_types']}
-우선 사용할 학습 단어: {state.get('focus_words', [])}
-원본 자료 분석: {state['analysis']}
+    def run(self, learner_level, difficulty, words, type_ids, question_count):
+        selected=[QUESTION_TYPES[x][0] for x in type_ids if x in QUESTION_TYPES]
+        word_text=", ".join([w.get("word","") for w in words if w.get("word")])
+        prompt=f"""
+You are an English vocabulary test writer.
+Target learner: {learner_level}
+Difficulty/style: {difficulty}
+Studied vocabulary: {word_text}
+Allowed question types ONLY: {", ".join(selected)}
+Create exactly {question_count} questions, distributed as evenly as possible among allowed types.
 
-규칙:
-- 원본 자료의 단어와 표현을 중심으로 출제하세요.
-- 수준에 맞게 난이도를 조절하세요.
-- 정답은 하나로 명확해야 합니다.
-- 객관식은 보기 4개입니다.
-- 문제 유형을 균형 있게 섞습니다.
-- id는 q1, q2 ... 형식입니다.
-- question_type은 multiple_choice 또는 short_answer입니다.
+Rules:
+- Test primarily the uploaded/studied vocabulary. Do not replace it with unrelated target words.
+- Adjust sentence length, distractors, grammar, and context to learner level and difficulty.
+- For kindergarten/young learners use very short, concrete, child-friendly language.
+- TOSEL style should be age/cognitive-stage appropriate and communication oriented.
+- TOEFL Junior style should emphasize vocabulary/grammar in context and short reading context.
+- TOEFL style should emphasize contextual meaning, academic/nonacademic reading, inference and usage.
+- "최선어학원 유형" should be a challenging academy-style diagnostic mix: meaning recognition, context, sentence completion, collocation/usage, advanced inference.
+- Do not claim these are official copyrighted test questions. Create original questions inspired by skill types.
+- Multiple choice questions must have exactly 4 choices.
+- guided writing may be short-answer; otherwise use multiple_choice.
 
-다음 JSON만 반환하세요.
+Return JSON:
 {{
-  "title": "맞춤 영어 단어 테스트",
-  "questions": [
-    {{
-      "id": "q1",
-      "question_type": "multiple_choice",
-      "problem_type": "meaning_choice",
-      "target_word": "example",
-      "question": "문제",
-      "options": ["A","B","C","D"],
-      "correct_answer": "A",
-      "explanation": "해설"
-    }}
-  ]
+ "questions":[
+   {{
+    "id":1,
+    "type_id":"one allowed id",
+    "type_name":"Korean type name",
+    "format":"multiple_choice or short_answer",
+    "question":"question text",
+    "choices":["A","B","C","D"],
+    "answer":"exact correct choice text for MC, or model answer for short",
+    "target_word":"studied target word",
+    "explanation":"short Korean explanation"
+   }}
+ ]
 }}
 """
-        response_text = generate_text(
-            prompt,
-            "당신은 수준별 영어 문제 출제 전문가입니다. 반드시 JSON만 반환하세요.",
-            0.5,
-        )
-        return {**state, "quiz": extract_json(response_text)}
+        data=generate_json(prompt)
+        qs=data.get("questions",[])
+        if len(qs)>question_count: qs=qs[:question_count]
+        return {"questions":qs}
