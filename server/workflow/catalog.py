@@ -1,67 +1,79 @@
 QUESTION_TYPES = {
- "meaning_choice": ("뜻 고르기", "단어와 뜻의 연결을 확인하는 4지선다"),
- "picture_situation": ("그림·상황 단어 찾기", "짧고 구체적인 상황을 보고 알맞은 단어 선택"),
- "example_choice": ("올바른 예문 고르기", "단어가 자연스럽게 쓰인 문장 선택"),
- "sentence_blank": ("문장 빈칸 채우기", "문맥에 맞는 어휘 선택"),
- "context_meaning": ("문맥 속 단어 의미", "문장·짧은 글 속 의미 파악"),
- "syn_ant": ("동의어·반의어", "의미 관계를 이용한 어휘 확장"),
- "collocation_usage": ("Collocation & Usage", "자주 함께 쓰는 표현과 정확한 용법"),
- "sentence_completion": ("문장 완성", "어휘·문법을 함께 적용"),
- "reading_inference": ("독해·추론형 어휘", "짧은 지문에서 의미·의도 추론"),
- "guided_writing": ("단어 활용 영작", "제시 단어를 사용해 문장 만들기"),
+    "word_meaning": ("단어-뜻 연결", "단어와 올바른 의미를 연결하는 기본 어휘 문제"),
+    "meaning_word": ("뜻 보고 단어 찾기", "뜻·설명에 맞는 영어 단어를 찾는 문제"),
+    "syn_ant": ("유의어·반의어", "유의어와 반의어를 이용해 의미 관계를 확장하는 문제"),
+    "sentence_blank": ("문장 빈칸", "문맥에 맞는 단어나 표현을 고르는 문제"),
+    "context_meaning": ("문맥 속 의미", "문장이나 짧은 글 안에서 단어의 실제 의미를 파악하는 문제"),
+    "usage": ("어휘 쓰임 / Usage", "자연스럽고 정확한 어휘 사용을 판단하는 문제"),
+    "collocation": ("Collocation · 숙어", "함께 자주 쓰이는 표현·숙어·연어를 익히는 문제"),
+    "sentence_completion": ("문장 완성", "어휘와 문법을 함께 적용해 문장을 완성하는 문제"),
+    "context_inference": ("문맥 추론", "짧은 지문에서 어휘 의미·의도·함축을 추론하는 문제"),
+    "writing": ("서술형 · 영작", "학습 단어를 활용해 직접 문장을 작성하는 문제"),
 }
 
-LEVEL_GUIDE = {
- "유치원": {
-   "easy":["meaning_choice","picture_situation"],
-   "normal":["picture_situation","example_choice","sentence_blank"],
-   "hard":["example_choice","sentence_blank","syn_ant"],
- },
- "초등 저학년": {
-   "easy":["meaning_choice","picture_situation","example_choice"],
-   "normal":["meaning_choice","picture_situation","sentence_blank","context_meaning"],
-   "hard":["example_choice","sentence_blank","context_meaning","syn_ant"],
- },
- "초등 고학년": {
-   "easy":["meaning_choice","example_choice","sentence_blank"],
-   "normal":["sentence_blank","context_meaning","syn_ant","sentence_completion"],
-   "hard":["context_meaning","collocation_usage","sentence_completion","reading_inference"],
- },
- "중학생": {
-   "easy":["meaning_choice","sentence_blank","context_meaning"],
-   "normal":["context_meaning","syn_ant","collocation_usage","sentence_completion"],
-   "hard":["collocation_usage","sentence_completion","reading_inference","guided_writing"],
- },
- "고등학생": {
-   "easy":["context_meaning","syn_ant","sentence_completion"],
-   "normal":["collocation_usage","sentence_completion","reading_inference","guided_writing"],
-   "hard":["context_meaning","collocation_usage","reading_inference","guided_writing"],
- },
- "성인": {
-   "easy":["meaning_choice","context_meaning","sentence_completion"],
-   "normal":["context_meaning","collocation_usage","sentence_completion","guided_writing"],
-   "hard":["collocation_usage","reading_inference","guided_writing","context_meaning"],
- },
+BASE = {
+    "유치원": {
+        "쉬움": ["word_meaning", "meaning_word"],
+        "보통": ["word_meaning", "meaning_word", "sentence_blank"],
+        "어려움": ["meaning_word", "sentence_blank", "syn_ant"],
+    },
+    "초등 저학년": {
+        "쉬움": ["word_meaning", "meaning_word", "sentence_blank"],
+        "보통": ["word_meaning", "meaning_word", "sentence_blank", "context_meaning"],
+        "어려움": ["sentence_blank", "context_meaning", "syn_ant", "sentence_completion"],
+    },
+    "초등 고학년": {
+        "쉬움": ["word_meaning", "sentence_blank", "context_meaning"],
+        "보통": ["sentence_blank", "context_meaning", "syn_ant", "sentence_completion"],
+        "어려움": ["context_meaning", "usage", "collocation", "sentence_completion", "context_inference"],
+    },
+    "중학생": {
+        "쉬움": ["word_meaning", "sentence_blank", "context_meaning"],
+        "보통": ["context_meaning", "syn_ant", "usage", "sentence_completion"],
+        "어려움": ["usage", "collocation", "sentence_completion", "context_inference", "writing"],
+    },
+    "고등학생": {
+        "쉬움": ["context_meaning", "syn_ant", "sentence_completion"],
+        "보통": ["usage", "collocation", "sentence_completion", "context_inference"],
+        "어려움": ["context_meaning", "usage", "collocation", "context_inference", "writing"],
+    },
+    "성인": {
+        "쉬움": ["word_meaning", "context_meaning", "sentence_completion"],
+        "보통": ["context_meaning", "usage", "collocation", "sentence_completion", "writing"],
+        "어려움": ["usage", "collocation", "context_inference", "writing", "context_meaning"],
+    },
 }
 
-EXAM_GUIDE = {
- "TOSEL 수준": {
-  "유치원":["meaning_choice","picture_situation"],
-  "초등 저학년":["meaning_choice","picture_situation","sentence_blank"],
-  "초등 고학년":["meaning_choice","sentence_blank","context_meaning"],
-  "중학생":["sentence_blank","context_meaning","sentence_completion"],
-  "고등학생":["context_meaning","sentence_completion","reading_inference"],
-  "성인":["context_meaning","sentence_completion","reading_inference"],
- },
- "TOEFL Junior 수준":["sentence_blank","context_meaning","collocation_usage","sentence_completion","reading_inference"],
- "TOEFL 수준":["context_meaning","collocation_usage","reading_inference","sentence_completion","guided_writing"],
- "최선어학원 유형":["meaning_choice","context_meaning","sentence_completion","collocation_usage","reading_inference"],
+EXAM = {
+    "TOSEL 수준": {
+        "유치원": ["word_meaning", "meaning_word"],
+        "초등 저학년": ["word_meaning", "meaning_word", "sentence_blank"],
+        "초등 고학년": ["word_meaning", "sentence_blank", "context_meaning", "sentence_completion"],
+        "중학생": ["sentence_blank", "context_meaning", "sentence_completion", "usage"],
+        "고등학생": ["context_meaning", "usage", "sentence_completion", "context_inference"],
+        "성인": ["context_meaning", "usage", "sentence_completion", "context_inference"],
+    },
+    "TOEFL Junior 수준": ["sentence_blank", "context_meaning", "usage", "sentence_completion", "context_inference"],
+    "TOEFL 수준": ["context_meaning", "usage", "collocation", "context_inference", "writing"],
+    "최선어학원 유형": ["word_meaning", "context_meaning", "sentence_completion", "collocation", "context_inference"],
 }
 
-def recommended_types(level, difficulty):
-    if difficulty in ("쉬움","보통","어려움"):
-        key={"쉬움":"easy","보통":"normal","어려움":"hard"}[difficulty]
-        return LEVEL_GUIDE.get(level, LEVEL_GUIDE["성인"])[key]
-    if difficulty=="TOSEL 수준":
-        return EXAM_GUIDE[difficulty].get(level, EXAM_GUIDE[difficulty]["초등 고학년"])
-    return EXAM_GUIDE.get(difficulty, LEVEL_GUIDE.get(level, LEVEL_GUIDE["성인"])["normal"])
+SCHOOL_ADD = {
+    "중학교 내신": ["sentence_blank", "usage", "sentence_completion", "writing"],
+    "고등학교 내신": ["context_meaning", "usage", "collocation", "context_inference", "writing"],
+}
+
+def recommended_types(level: str, difficulty: str, school_mode: str = "적용 안 함"):
+    if difficulty in ("쉬움", "보통", "어려움"):
+        keys = list(BASE.get(level, BASE["성인"])[difficulty])
+    elif difficulty == "TOSEL 수준":
+        keys = list(EXAM["TOSEL 수준"].get(level, EXAM["TOSEL 수준"]["초등 고학년"]))
+    else:
+        keys = list(EXAM.get(difficulty, BASE.get(level, BASE["성인"])["보통"]))
+
+    if school_mode in SCHOOL_ADD:
+        # 내신형은 관련 유형을 앞쪽에 보강하되 과도하게 많은 기본 체크는 피한다.
+        for x in SCHOOL_ADD[school_mode]:
+            if x not in keys:
+                keys.append(x)
+    return keys[:6]
