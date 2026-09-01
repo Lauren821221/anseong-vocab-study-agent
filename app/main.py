@@ -1175,3 +1175,24 @@ with tab_history:
                     f"clear_hist_{random.randint(1,999999)}",
                 )
             st.success("현재 사용자의 학습 기록만 초기화했습니다.")
+
+
+# ---------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------
+st.markdown(
+    """
+    <div style="
+        text-align:center;
+        margin-top:48px;
+        padding:20px 0 8px 0;
+        color:#9AA0A6;
+        font-size:13px;
+        letter-spacing:0.3px;
+    ">
+        Powered by <strong>Lauren</strong>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
