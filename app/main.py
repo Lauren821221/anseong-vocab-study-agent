@@ -469,17 +469,17 @@ with tab_home:
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1:
-        with st.container(border=True):
+        with st.container(border=True, height=258):
             st.markdown("### 📘 Vocabulary 학습")
             st.write("기존 단어 학습 흐름을 그대로 유지합니다.")
             st.caption("여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드")
     with c2:
-        with st.container(border=True):
+        with st.container(border=True, height=258):
             st.markdown("### ✏️ Grammar 학습")
             st.write("공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.")
             st.caption("AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습")
     with c3:
-        with st.container(border=True):
+        with st.container(border=True, height=258):
             st.markdown("### 📊 학습 이력")
             st.write("홈에서 등록한 사용자의 학습 결과만 보여줍니다.")
             st.caption("서버 DB가 아니라 현재 브라우저에 저장")
