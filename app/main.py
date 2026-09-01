@@ -446,92 +446,50 @@ st.title("📚 안성맞춤 수준별 영어 스터디 에이전트")
 st.caption("Vocabulary와 Grammar를 학습하고, AI 추천 문제·채점·복습·재시험까지 연결합니다.")
 
 
-page_map = {
-    "home": "홈",
-    "vocab": "Vocabulary 학습",
-    "grammar": "Grammar 학습",
-    "history": "학습 이력",
-}
-active_page = st.query_params.get("page", "home")
-if active_page not in page_map:
-    active_page = "home"
+
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "home"
+
+active_page = st.session_state.active_page
+
+# One-page navigation: no URL links, no new page/tab.
+nav_cols = st.columns(4)
+nav_items = [
+    ("🏠 홈", "home"),
+    ("📘 Vocabulary 학습", "vocab"),
+    ("✏️ Grammar 학습", "grammar"),
+    ("📊 학습 이력", "history"),
+]
+for col, (label, page_key) in zip(nav_cols, nav_items):
+    with col:
+        if st.button(
+            label,
+            key=f"top_nav_{page_key}",
+            use_container_width=True,
+            type="primary" if active_page == page_key else "secondary",
+        ):
+            st.session_state.active_page = page_key
+            st.rerun()
 
 st.markdown(
-    f"""
+    """
     <style>
-    .lauren-nav {{
-        display:grid;
-        grid-template-columns:repeat(4,1fr);
-        gap:20px;
-        margin:4px 0 26px 0;
-    }}
-    .lauren-nav a {{
-        text-decoration:none !important;
-        color:#1f2937 !important;
-        border:1px solid #d5d9df;
-        border-radius:12px;
-        padding:13px 10px;
-        text-align:center;
-        font-size:17px;
-        background:white;
-    }}
-    .lauren-nav a.active {{
-        background:#ff4b4b;
-        color:white !important;
-        border-color:#ff4b4b;
-    }}
-    .home-card-link {{
-        text-decoration:none !important;
-        color:inherit !important;
-        display:block;
-        height:100%;
-    }}
-    .home-card {{
-        height:258px;
-        border:1px solid #d5d9df;
-        border-radius:12px;
-        padding:28px 20px;
-        box-sizing:border-box;
-        background:white;
-        transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
-        cursor:pointer;
-    }}
-    .home-card:hover {{
-        transform:translateY(-2px);
-        box-shadow:0 6px 18px rgba(0,0,0,.08);
-        border-color:#b9bec6;
-    }}
-    .home-card h3 {{
-        margin:0 0 18px 0;
-        font-size:30px;
-        line-height:1.25;
-        color:#1f2937;
-    }}
-    .home-card p {{
-        margin:0 0 22px 0;
-        font-size:18px;
-        line-height:1.55;
-        color:#1f2937;
-    }}
-    .home-card .sub {{
+    /* Hide Streamlit heading anchor/link icons */
+    [data-testid="stHeaderActionElements"] {
+        display: none !important;
+    }
+
+    /* Home cards rendered as real Streamlit buttons so navigation stays in one page */
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+        white-space: normal;
+    }
+
+    .home-card-note {
         color:#8b8f97;
-        font-size:15px;
-        line-height:1.45;
-    }}
-    [data-testid="stHeaderActionElements"] {{
-        display:none !important;
-    }}
-    @media (max-width: 800px) {{
-        .lauren-nav {{ grid-template-columns:1fr 1fr; gap:10px; }}
-        .home-card {{ height:auto; min-height:230px; }}
-    }}
+        font-size:14px;
+        margin-top:-8px;
+    }
     </style>
-    <div class="lauren-nav">
-      <a href="?page=home" class="{'active' if active_page == 'home' else ''}">🏠 홈</a>
-      <a href="?page=vocab" class="{'active' if active_page == 'vocab' else ''}">📘 Vocabulary 학습</a>
-      <a href="?page=grammar" class="{'active' if active_page == 'grammar' else ''}">✏️ Grammar 학습</a>
-      <a href="?page=history" class="{'active' if active_page == 'history' else ''}">📊 학습 이력</a>
-    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -555,46 +513,51 @@ if active_page == "home":
                 st.warning("이름 또는 별칭을 입력해주세요.")
 
     st.divider()
+
+    # Same-page clickable cards
     c1, c2, c3 = st.columns(3)
+
     with c1:
-        st.markdown(
-            """
-            <a class="home-card-link" href="?page=vocab">
-              <div class="home-card">
-                <h3>📘 Vocabulary 학습</h3>
-                <p>기존 단어 학습 흐름을 그대로 유지합니다.</p>
-                <div class="sub">여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드</div>
-              </div>
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.container(border=True, height=258):
+            st.markdown("### 📘 Vocabulary 학습")
+            st.write("기존 단어 학습 흐름을 그대로 유지합니다.")
+            st.caption("여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드")
+            st.write("")
+            if st.button(
+                "Vocabulary 학습 열기",
+                key="home_card_vocab",
+                use_container_width=True,
+            ):
+                st.session_state.active_page = "vocab"
+                st.rerun()
+
     with c2:
-        st.markdown(
-            """
-            <a class="home-card-link" href="?page=grammar">
-              <div class="home-card">
-                <h3>✏️ Grammar 학습</h3>
-                <p>공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.</p>
-                <div class="sub">AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습</div>
-              </div>
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.container(border=True, height=258):
+            st.markdown("### ✏️ Grammar 학습")
+            st.write("공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.")
+            st.caption("AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습")
+            st.write("")
+            if st.button(
+                "Grammar 학습 열기",
+                key="home_card_grammar",
+                use_container_width=True,
+            ):
+                st.session_state.active_page = "grammar"
+                st.rerun()
+
     with c3:
-        st.markdown(
-            """
-            <a class="home-card-link" href="?page=history">
-              <div class="home-card">
-                <h3>📊 학습 이력</h3>
-                <p>홈에서 등록한 사용자의 학습 결과만 보여줍니다.</p>
-                <div class="sub">서버 DB가 아니라 현재 브라우저에 저장</div>
-              </div>
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.container(border=True, height=258):
+            st.markdown("### 📊 학습 이력")
+            st.write("홈에서 등록한 사용자의 학습 결과만 보여줍니다.")
+            st.caption("서버 DB가 아니라 현재 브라우저에 저장")
+            st.write("")
+            if st.button(
+                "학습 이력 열기",
+                key="home_card_history",
+                use_container_width=True,
+            ):
+                st.session_state.active_page = "history"
+                st.rerun()
 
 # ---------------------------------------------------------------------
 # Vocabulary - 기존 서비스 흐름 유지
