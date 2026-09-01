@@ -78,7 +78,26 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] div[style*="b
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown(
+    """
+    <style>
+    /* Hide Streamlit heading anchor/link icons */
+    a.header-anchor,
+    a[href^="#"] svg,
+    [data-testid="stHeaderActionElements"] {
+        display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 init_state()
+
+
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "홈"
 
 for key, default in {
     "grammar_analysis": None,
@@ -443,11 +462,31 @@ load_browser_profile()
 st.title("📚 안성맞춤 수준별 영어 스터디 에이전트")
 st.caption("Vocabulary와 Grammar를 학습하고, AI 추천 문제·채점·복습·재시험까지 연결합니다.")
 
-tab_home, tab_vocab, tab_grammar, tab_history = st.tabs(
-    ["🏠 홈", "📘 Vocabulary 학습", "✏️ Grammar 학습", "📊 학습 이력"]
-)
+nav_cols = st.columns(4)
 
-with tab_home:
+nav_items = [
+
+    ("🏠 홈", "홈"),
+
+    ("📘 Vocabulary 학습", "Vocabulary 학습"),
+
+    ("✏️ Grammar 학습", "Grammar 학습"),
+
+    ("📊 학습 이력", "학습 이력"),
+
+]
+
+for col, (label, page) in zip(nav_cols, nav_items):
+
+    with col:
+
+        if st.button(label, use_container_width=True, key=f"nav_{page}", type="primary" if st.session_state.active_page == page else "secondary"):
+
+            st.session_state.active_page = page
+
+            st.rerun()
+
+if st.session_state.active_page == "홈":
     st.subheader("👤 사용자 정보")
     st.caption("이름 또는 별칭을 한 번 등록하면 이 브라우저에 저장되며, 학습 이력 화면에서 사용됩니다.")
     c1, c2 = st.columns([3, 1])
@@ -473,21 +512,30 @@ with tab_home:
             st.markdown("### 📘 Vocabulary 학습")
             st.write("기존 단어 학습 흐름을 그대로 유지합니다.")
             st.caption("여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드")
+            if st.button("Vocabulary 시작 →", key="home_go_vocab", use_container_width=True):
+                st.session_state.active_page = "Vocabulary 학습"
+                st.rerun()
     with c2:
         with st.container(border=True, height=258):
             st.markdown("### ✏️ Grammar 학습")
             st.write("공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.")
             st.caption("AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습")
+            if st.button("Grammar 시작 →", key="home_go_grammar", use_container_width=True):
+                st.session_state.active_page = "Grammar 학습"
+                st.rerun()
     with c3:
         with st.container(border=True, height=258):
             st.markdown("### 📊 학습 이력")
             st.write("홈에서 등록한 사용자의 학습 결과만 보여줍니다.")
             st.caption("서버 DB가 아니라 현재 브라우저에 저장")
+            if st.button("학습 이력 보기 →", key="home_go_history", use_container_width=True):
+                st.session_state.active_page = "학습 이력"
+                st.rerun()
 
 # ---------------------------------------------------------------------
 # Vocabulary - 기존 서비스 흐름 유지
 # ---------------------------------------------------------------------
-with tab_vocab:
+if st.session_state.active_page == "Vocabulary 학습":
     top1, top2 = st.columns([5, 1])
     with top2:
         if st.button("＋ 새 학습", key="vocab_reset", use_container_width=True):
@@ -799,7 +847,7 @@ GRAMMAR_TYPES = [
     {"id": "advanced_usage", "name": "Advanced Usage & Inference", "description": "긴 문맥 속 심화 어법 판단"},
 ]
 
-with tab_grammar:
+if st.session_state.active_page == "Grammar 학습":
     c1, c2 = st.columns([5, 1])
     with c2:
         if st.button("＋ 새 학습", key="g_reset", use_container_width=True):
@@ -1173,7 +1221,7 @@ Return the same JSON question array format used before.
 # ---------------------------------------------------------------------
 # 학습 이력
 # ---------------------------------------------------------------------
-with tab_history:
+if st.session_state.active_page == "학습 이력":
     st.subheader("📊 학습 이력")
     if not st.session_state.learner_name:
         st.info("홈에서 이름 또는 별칭을 먼저 등록해주세요.")
