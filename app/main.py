@@ -66,6 +66,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.markdown("""
+<style>
+/* HOME: Vocabulary / Grammar / History cards — same size */
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] div[style*="border:1px solid"],
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] div[style*="border: 1px solid"] {
+    min-height: 258px !important;
+    height: 258px !important;
+    box-sizing: border-box !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 init_state()
 
 for key, default in {
