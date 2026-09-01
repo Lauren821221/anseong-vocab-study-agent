@@ -78,26 +78,9 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] div[style*="b
 </style>
 """, unsafe_allow_html=True)
 
-
-st.markdown(
-    """
-    <style>
-    /* Hide Streamlit heading anchor/link icons */
-    a.header-anchor,
-    a[href^="#"] svg,
-    [data-testid="stHeaderActionElements"] {
-        display: none !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+LEVELS = ["유치원", "초등 저학년", "초등 고학년", "중학생", "고등학생", "성인"]
 
 init_state()
-
-
-if "active_page" not in st.session_state:
-    st.session_state.active_page = "홈"
 
 for key, default in {
     "grammar_analysis": None,
@@ -462,31 +445,97 @@ load_browser_profile()
 st.title("📚 안성맞춤 수준별 영어 스터디 에이전트")
 st.caption("Vocabulary와 Grammar를 학습하고, AI 추천 문제·채점·복습·재시험까지 연결합니다.")
 
-nav_cols = st.columns(4)
 
-nav_items = [
+page_map = {
+    "home": "홈",
+    "vocab": "Vocabulary 학습",
+    "grammar": "Grammar 학습",
+    "history": "학습 이력",
+}
+active_page = st.query_params.get("page", "home")
+if active_page not in page_map:
+    active_page = "home"
 
-    ("🏠 홈", "홈"),
-
-    ("📘 Vocabulary 학습", "Vocabulary 학습"),
-
-    ("✏️ Grammar 학습", "Grammar 학습"),
-
-    ("📊 학습 이력", "학습 이력"),
-
-]
-
-for col, (label, page) in zip(nav_cols, nav_items):
-
-    with col:
-
-        if st.button(label, use_container_width=True, key=f"nav_{page}", type="primary" if st.session_state.active_page == page else "secondary"):
-
-            st.session_state.active_page = page
-
-            st.rerun()
-
-if st.session_state.active_page == "홈":
+st.markdown(
+    f"""
+    <style>
+    .lauren-nav {{
+        display:grid;
+        grid-template-columns:repeat(4,1fr);
+        gap:20px;
+        margin:4px 0 26px 0;
+    }}
+    .lauren-nav a {{
+        text-decoration:none !important;
+        color:#1f2937 !important;
+        border:1px solid #d5d9df;
+        border-radius:12px;
+        padding:13px 10px;
+        text-align:center;
+        font-size:17px;
+        background:white;
+    }}
+    .lauren-nav a.active {{
+        background:#ff4b4b;
+        color:white !important;
+        border-color:#ff4b4b;
+    }}
+    .home-card-link {{
+        text-decoration:none !important;
+        color:inherit !important;
+        display:block;
+        height:100%;
+    }}
+    .home-card {{
+        height:258px;
+        border:1px solid #d5d9df;
+        border-radius:12px;
+        padding:28px 20px;
+        box-sizing:border-box;
+        background:white;
+        transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+        cursor:pointer;
+    }}
+    .home-card:hover {{
+        transform:translateY(-2px);
+        box-shadow:0 6px 18px rgba(0,0,0,.08);
+        border-color:#b9bec6;
+    }}
+    .home-card h3 {{
+        margin:0 0 18px 0;
+        font-size:30px;
+        line-height:1.25;
+        color:#1f2937;
+    }}
+    .home-card p {{
+        margin:0 0 22px 0;
+        font-size:18px;
+        line-height:1.55;
+        color:#1f2937;
+    }}
+    .home-card .sub {{
+        color:#8b8f97;
+        font-size:15px;
+        line-height:1.45;
+    }}
+    [data-testid="stHeaderActionElements"] {{
+        display:none !important;
+    }}
+    @media (max-width: 800px) {{
+        .lauren-nav {{ grid-template-columns:1fr 1fr; gap:10px; }}
+        .home-card {{ height:auto; min-height:230px; }}
+    }}
+    </style>
+    <div class="lauren-nav">
+      <a href="?page=home" class="{'active' if active_page == 'home' else ''}">🏠 홈</a>
+      <a href="?page=vocab" class="{'active' if active_page == 'vocab' else ''}">📘 Vocabulary 학습</a>
+      <a href="?page=grammar" class="{'active' if active_page == 'grammar' else ''}">✏️ Grammar 학습</a>
+      <a href="?page=history" class="{'active' if active_page == 'history' else ''}">📊 학습 이력</a>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+if active_page == "home":
     st.subheader("👤 사용자 정보")
     st.caption("이름 또는 별칭을 한 번 등록하면 이 브라우저에 저장되며, 학습 이력 화면에서 사용됩니다.")
     c1, c2 = st.columns([3, 1])
@@ -508,34 +557,49 @@ if st.session_state.active_page == "홈":
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1:
-        with st.container(border=True, height=258):
-            st.markdown("### 📘 Vocabulary 학습")
-            st.write("기존 단어 학습 흐름을 그대로 유지합니다.")
-            st.caption("여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드")
-            if st.button("Vocabulary 시작 →", key="home_go_vocab", use_container_width=True):
-                st.session_state.active_page = "Vocabulary 학습"
-                st.rerun()
+        st.markdown(
+            """
+            <a class="home-card-link" href="?page=vocab">
+              <div class="home-card">
+                <h3>📘 Vocabulary 학습</h3>
+                <p>기존 단어 학습 흐름을 그대로 유지합니다.</p>
+                <div class="sub">여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드</div>
+              </div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
     with c2:
-        with st.container(border=True, height=258):
-            st.markdown("### ✏️ Grammar 학습")
-            st.write("공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.")
-            st.caption("AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습")
-            if st.button("Grammar 시작 →", key="home_go_grammar", use_container_width=True):
-                st.session_state.active_page = "Grammar 학습"
-                st.rerun()
+        st.markdown(
+            """
+            <a class="home-card-link" href="?page=grammar">
+              <div class="home-card">
+                <h3>✏️ Grammar 학습</h3>
+                <p>공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.</p>
+                <div class="sub">AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습</div>
+              </div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
     with c3:
-        with st.container(border=True, height=258):
-            st.markdown("### 📊 학습 이력")
-            st.write("홈에서 등록한 사용자의 학습 결과만 보여줍니다.")
-            st.caption("서버 DB가 아니라 현재 브라우저에 저장")
-            if st.button("학습 이력 보기 →", key="home_go_history", use_container_width=True):
-                st.session_state.active_page = "학습 이력"
-                st.rerun()
+        st.markdown(
+            """
+            <a class="home-card-link" href="?page=history">
+              <div class="home-card">
+                <h3>📊 학습 이력</h3>
+                <p>홈에서 등록한 사용자의 학습 결과만 보여줍니다.</p>
+                <div class="sub">서버 DB가 아니라 현재 브라우저에 저장</div>
+              </div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
 
 # ---------------------------------------------------------------------
 # Vocabulary - 기존 서비스 흐름 유지
 # ---------------------------------------------------------------------
-if st.session_state.active_page == "Vocabulary 학습":
+if active_page == "vocab":
     top1, top2 = st.columns([5, 1])
     with top2:
         if st.button("＋ 새 학습", key="vocab_reset", use_container_width=True):
@@ -545,7 +609,7 @@ if st.session_state.active_page == "Vocabulary 학습":
     st.subheader("① 학습 자료 선택")
     st.caption("학습자 수준을 먼저 선택한 뒤 사진 업로드, 카메라 촬영, 기존 학습자료 중 하나를 선택하세요.")
 
-    levels = ["유치원", "초등 저학년", "초등 고학년", "중학생", "고등학생", "성인"]
+    levels = LEVELS
     learner_level = st.selectbox(
         "학습자 수준", levels, index=1, key="learner_level",
         help="자료 분석부터 문제 추천·출제·채점까지 동일한 수준을 사용합니다.",
@@ -847,7 +911,7 @@ GRAMMAR_TYPES = [
     {"id": "advanced_usage", "name": "Advanced Usage & Inference", "description": "긴 문맥 속 심화 어법 판단"},
 ]
 
-if st.session_state.active_page == "Grammar 학습":
+if active_page == "grammar":
     c1, c2 = st.columns([5, 1])
     with c2:
         if st.button("＋ 새 학습", key="g_reset", use_container_width=True):
@@ -863,7 +927,7 @@ if st.session_state.active_page == "Grammar 학습":
     st.subheader("① 학습 자료 선택")
     st.caption("Vocabulary와 동일하게 학습자 수준을 먼저 선택하고 문법 교재 사진을 업로드합니다.")
 
-    g_level = st.selectbox("학습자 수준", levels, index=2, key="g_level")
+    g_level = st.selectbox("학습자 수준", LEVELS, index=2, key="g_level")
     g_images = st.file_uploader(
         "문법 학습자료 사진",
         type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
@@ -1221,7 +1285,7 @@ Return the same JSON question array format used before.
 # ---------------------------------------------------------------------
 # 학습 이력
 # ---------------------------------------------------------------------
-if st.session_state.active_page == "학습 이력":
+if active_page == "history":
     st.subheader("📊 학습 이력")
     if not st.session_state.learner_name:
         st.info("홈에서 이름 또는 별칭을 먼저 등록해주세요.")
