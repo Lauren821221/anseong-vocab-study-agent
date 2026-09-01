@@ -515,14 +515,25 @@ if active_page == "home":
     st.divider()
 
     # Same-page clickable cards
+    # 카드 전체 높이뿐 아니라 제목/설명/보조문구 영역도 같은 높이로 맞춰
+    # 세 카드의 버튼 위치까지 정확히 정렬합니다.
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        with st.container(border=True, height=258):
+        with st.container(border=True, height=320):
             st.markdown("### 📘 Vocabulary 학습")
-            st.write("기존 단어 학습 흐름을 그대로 유지합니다.")
-            st.caption("여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드")
-            st.write("")
+            st.markdown(
+                '<div style="height:64px; font-size:18px; line-height:1.55;">'
+                '기존 단어 학습 흐름을 그대로 유지합니다.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="height:64px; color:#8b8f97; font-size:15px; line-height:1.5;">'
+                '여러 장 사진 분석 · AI 유형 추천 · 10개 유형 · 채점 · 복습 카드'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             if st.button(
                 "Vocabulary 학습 열기",
                 key="home_card_vocab",
@@ -532,11 +543,20 @@ if active_page == "home":
                 st.rerun()
 
     with c2:
-        with st.container(border=True, height=258):
+        with st.container(border=True, height=320):
             st.markdown("### ✏️ Grammar 학습")
-            st.write("공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.")
-            st.caption("AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습")
-            st.write("")
+            st.markdown(
+                '<div style="height:64px; font-size:18px; line-height:1.55;">'
+                '공부한 문법 자료를 분석해 수준별 문법 문제를 만듭니다.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="height:64px; color:#8b8f97; font-size:15px; line-height:1.5;">'
+                'AI 유형 추천 · TOEFL/Junior/최선/내신 · 취약 문법 복습'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             if st.button(
                 "Grammar 학습 열기",
                 key="home_card_grammar",
@@ -546,11 +566,20 @@ if active_page == "home":
                 st.rerun()
 
     with c3:
-        with st.container(border=True, height=258):
+        with st.container(border=True, height=320):
             st.markdown("### 📊 학습 이력")
-            st.write("홈에서 등록한 사용자의 학습 결과만 보여줍니다.")
-            st.caption("서버 DB가 아니라 현재 브라우저에 저장")
-            st.write("")
+            st.markdown(
+                '<div style="height:64px; font-size:18px; line-height:1.55;">'
+                '홈에서 등록한 사용자의 학습 결과만 보여줍니다.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="height:64px; color:#8b8f97; font-size:15px; line-height:1.5;">'
+                '서버 DB가 아니라 현재 브라우저에 저장'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             if st.button(
                 "학습 이력 열기",
                 key="home_card_history",
