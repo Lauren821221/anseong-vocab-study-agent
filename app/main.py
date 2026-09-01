@@ -2,6 +2,7 @@ import os
 import io
 import json
 import random
+import re
 from datetime import datetime
 
 import requests
@@ -171,14 +172,88 @@ def combine_uploaded_images(uploaded_images, max_width=1400, max_total_height=10
     return buf.getvalue()
 
 
+
+def choice_value(choice):
+    """Return the canonical answer value for a choice."""
+    if isinstance(choice, dict):
+        for key in ("text", "label", "value", "option"):
+            value = choice.get(key)
+            if value is not None:
+                return str(value)
+        return str(choice)
+    return str(choice)
+
+
+def underline_text(text, target):
+    """Visually underline target inside text using combining underline characters."""
+    text = str(text or "")
+    target = str(target or "").strip()
+    if not target:
+        return text
+
+    pattern = re.compile(re.escape(target), re.IGNORECASE)
+
+    def _u(match):
+        return "".join(ch + "\u0332" for ch in match.group(0))
+
+    return pattern.sub(_u, text)
+
+
+def choice_display(choice):
+    """Human-friendly option text; hides dict structure and applies underline."""
+    if isinstance(choice, dict):
+        text = choice_value(choice)
+        highlight = (
+            choice.get("highlight_word")
+            or choice.get("highlight")
+            or choice.get("underline")
+            or ""
+        )
+        return underline_text(text, highlight)
+    return str(choice)
+
+
+def clean_question_text(value):
+    """Remove accidental outer Markdown bold markers returned by an LLM."""
+    s = str(value or "").strip()
+    while s.startswith("**") and s.endswith("**") and len(s) >= 4:
+        s = s[2:-2].strip()
+    return s
+
+
+def radio_choice(label, choices, key):
+    """Render choices cleanly while returning canonical text for grading."""
+    choices = list(choices or [])
+    option_ids = [-1] + list(range(len(choices)))
+
+    selected = st.radio(
+        label,
+        option_ids,
+        index=0,
+        key=key,
+        format_func=lambda i: "선택 안 함" if i == -1 else choice_display(choices[i]),
+    )
+
+    if selected == -1:
+        return "선택 안 함"
+    return choice_value(choices[selected])
+
+
 def balance_answer_positions(questions):
-    """4지선다 정답 위치를 A/B/C/D에 가능한 균등하게 재배치."""
+    """4지선다 정답 위치를 A/B/C/D에 가능한 균등하게 재배치.
+    choices가 문자열 또는 {"text": ..., "highlight_word": ...} 딕셔너리여도 처리한다.
+    """
     rng = random.SystemRandom()
     objective = []
+
     for q in questions:
-        if q.get("format") == "short_answer" or len(q.get("choices", [])) != 4:
+        choices = list(q.get("choices", []) or [])
+        if q.get("format") == "short_answer" or len(choices) != 4:
             continue
-        answer_key = next((k for k in ("answer", "correct_answer", "correct_index") if k in q), None)
+        answer_key = next(
+            (k for k in ("answer", "correct_answer", "correct_index") if k in q),
+            None,
+        )
         if answer_key:
             objective.append((q, answer_key))
 
@@ -197,10 +272,19 @@ def balance_answer_positions(questions):
                 old_index, representation = raw, "zero"
             elif 1 <= raw <= 4:
                 old_index, representation = raw - 1, "one"
+
+        elif isinstance(raw, dict):
+            raw_value = choice_value(raw)
+            values = [choice_value(c) for c in choices]
+            if raw_value in values:
+                old_index, representation = values.index(raw_value), "dict"
+
         elif isinstance(raw, str):
             s = raw.strip()
-            if s in choices:
-                old_index, representation = choices.index(s), "text"
+            values = [choice_value(c) for c in choices]
+
+            if s in values:
+                old_index, representation = values.index(s), "text"
             elif s.upper() in ["A", "B", "C", "D"]:
                 old_index, representation = ord(s.upper()) - 65, "letter"
             elif s.isdigit():
@@ -216,12 +300,13 @@ def balance_answer_positions(questions):
         correct = choices[old_index]
         distractors = [c for i, c in enumerate(choices) if i != old_index]
         rng.shuffle(distractors)
+
         new_choices = distractors[:]
         new_choices.insert(target, correct)
         q["choices"] = new_choices
 
-        if representation == "text":
-            q[key] = correct
+        if representation in ("text", "dict"):
+            q[key] = choice_value(correct)
         elif representation == "letter":
             q[key] = chr(65 + target)
         elif representation == "zero":
@@ -232,6 +317,7 @@ def balance_answer_positions(questions):
             q[key] = str(target)
         elif representation == "one_str":
             q[key] = str(target + 1)
+
     return questions
 
 
@@ -569,13 +655,15 @@ with tab_vocab:
         with st.form("vocab_quiz_form"):
             answers = {}
             for q in st.session_state.questions:
-                st.markdown(f"**{q['id']}. [{q.get('type_name','')}] {q['question']}**")
+                q_text = clean_question_text(q.get("question", ""))
+                st.markdown(f"**{q['id']}. [{q.get('type_name','')}]** {q_text}")
                 if q.get("format") == "short_answer":
                     answers[str(q["id"])] = st.text_input("답", key=f"v_answer_{q['id']}")
                 else:
-                    answers[str(q["id"])] = st.radio(
-                        "정답 선택", ["선택 안 함"] + q.get("choices", []),
-                        index=0, key=f"v_answer_{q['id']}",
+                    answers[str(q["id"])] = radio_choice(
+                        "정답 선택",
+                        q.get("choices", []),
+                        key=f"v_answer_{q['id']}",
                     )
                 st.write("")
             submitted = st.form_submit_button("답안 제출 및 채점", type="primary")
@@ -902,14 +990,15 @@ For short_answer use "choices":[] and "answer":"model answer".
         with st.form("grammar_quiz_form"):
             ganswers = {}
             for q in st.session_state.grammar_questions:
-                st.markdown(f"**{q.get('id')}. [{q.get('type_name','')}] {q.get('question','')}**")
+                q_text = clean_question_text(q.get("question", ""))
+                st.markdown(f"**{q.get('id')}. [{q.get('type_name','')}]** {q_text}")
                 if q.get("format") == "short_answer":
                     ganswers[str(q.get("id"))] = st.text_input("답", key=f"g_answer_{q.get('id')}")
                 else:
-                    ganswers[str(q.get("id"))] = st.radio(
+                    ganswers[str(q.get("id"))] = radio_choice(
                         "정답 선택",
-                        ["선택 안 함"] + q.get("choices", []),
-                        index=0, key=f"g_answer_{q.get('id')}",
+                        q.get("choices", []),
+                        key=f"g_answer_{q.get('id')}",
                     )
                 st.write("")
             gsubmitted = st.form_submit_button("답안 제출 및 채점", type="primary")
