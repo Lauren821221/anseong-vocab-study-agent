@@ -48,6 +48,24 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# Home menu cards: equal-height columns/cards
+st.markdown(
+    """
+    <style>
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="stColumn"]:nth-child(3))
+      > div[data-testid="stColumn"] {
+        align-self: stretch;
+    }
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="stColumn"]:nth-child(3))
+      > div[data-testid="stColumn"] > div {
+        height: 100%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 init_state()
 
 for key, default in {
