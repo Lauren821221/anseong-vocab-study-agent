@@ -253,6 +253,65 @@ def clean_question_text(value):
     return s
 
 
+def grammar_question_display(q):
+    """Render grammar question text and underline the requested target phrase."""
+    q_text = clean_question_text(q.get("question", ""))
+    highlight = (
+        q.get("highlight_word")
+        or q.get("highlight_phrase")
+        or q.get("underlined_text")
+        or q.get("target_phrase")
+        or q.get("underline")
+        or ""
+    )
+    return underline_text(q_text, highlight)
+
+
+def grammar_question_needs_highlight(q):
+    """Detect questions whose instruction explicitly refers to an underlined part."""
+    q_text = str(q.get("question", ""))
+    markers = ["밑줄", "underlined", "underline", "밑줄 친", "밑줄친"]
+    return any(m.lower() in q_text.lower() for m in markers)
+
+
+def repair_missing_grammar_highlights(questions):
+    """Ask Gemini once to add missing highlight metadata without changing answers."""
+    missing = [
+        q for q in questions
+        if grammar_question_needs_highlight(q)
+        and not (
+            q.get("highlight_word")
+            or q.get("highlight_phrase")
+            or q.get("underlined_text")
+            or q.get("target_phrase")
+            or q.get("underline")
+        )
+    ]
+    if not missing:
+        return questions
+
+    prompt = f"""
+You are repairing grammar quiz JSON.
+
+Some questions explicitly mention an underlined word or phrase, but the underline metadata is missing.
+For EVERY question that refers to an underlined part:
+1. Add "highlight_word" containing the EXACT word or phrase already present in the question text.
+2. The exact highlight_word MUST occur verbatim inside "question".
+3. Do NOT change the correct answer, choices, question type, topic, or meaning.
+4. If needed, minimally rewrite only the sentence portion so the target phrase is explicitly present.
+5. Questions that do not need an underline should use "highlight_word": "".
+
+Return the FULL question array only.
+
+QUESTIONS:
+{json.dumps(questions, ensure_ascii=False)}
+"""
+    repaired = gemini_json(prompt)
+    if isinstance(repaired, dict):
+        repaired = repaired.get("questions", questions)
+    return repaired if isinstance(repaired, list) else questions
+
+
 def radio_choice(label, choices, key):
     """Render choices cleanly while returning canonical text for grading."""
     choices = list(choices or [])
@@ -920,19 +979,72 @@ if active_page == "grammar":
     st.caption("Vocabulary와 동일하게 학습자 수준을 먼저 선택하고 문법 교재 사진을 업로드합니다.")
 
     g_level = st.selectbox("학습자 수준", LEVELS, index=2, key="g_level")
-    g_images = st.file_uploader(
-        "문법 학습자료 사진",
-        type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
-        accept_multiple_files=True,
-        key=f"g_files_{st.session_state.grammar_upload_nonce}",
-        help="공부한 문법 페이지를 여러 장 한 번에 선택할 수 있습니다.",
+
+    g_source_mode = st.radio(
+        "자료 선택 방식",
+        ["📁 사진 파일 업로드", "📷 카메라로 촬영", "📚 이전 문법 학습이력 불러오기"],
+        horizontal=True,
+        key="g_source_mode",
     )
 
-    if g_images:
-        st.caption(f"선택된 사진: {len(g_images)}장")
+    g_image_bytes = None
+
+    if g_source_mode == "📁 사진 파일 업로드":
+        g_images = st.file_uploader(
+            "문법 학습자료 사진",
+            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+            accept_multiple_files=True,
+            key=f"g_files_{st.session_state.grammar_upload_nonce}",
+            help="공부한 문법 페이지를 여러 장 한 번에 선택할 수 있습니다.",
+        )
+        if g_images:
+            st.caption(f"선택된 사진: {len(g_images)}장")
+            g_image_bytes = combine_uploaded_images(g_images)
+
+    elif g_source_mode == "📷 카메라로 촬영":
+        g_camera = st.camera_input(
+            "문법 학습자료 촬영",
+            key=f"g_camera_{st.session_state.grammar_upload_nonce}",
+        )
+        if g_camera is not None:
+            g_image_bytes = g_camera.getvalue()
+
+    else:
+        grammar_histories = [
+            h for h in st.session_state.local_history
+            if h.get("study_type") == "Grammar" and h.get("grammar_analysis")
+        ]
+        if grammar_histories:
+            g_history_options = {}
+            for h in grammar_histories:
+                title = h.get("material_title") or h.get("grammar_analysis", {}).get("title") or "문법 학습자료"
+                created = str(h.get("created_at", ""))[:10]
+                mode = h.get("test_mode", "")
+                label = f"{title} · {mode} · {created}"
+                g_history_options[label] = h
+
+            g_history_label = st.selectbox(
+                "저장된 문법 학습이력",
+                list(g_history_options.keys()),
+                key="g_history_select",
+            )
+            if st.button("📚 이 문법 자료 불러오기", type="primary", key="g_history_load"):
+                h = g_history_options[g_history_label]
+                st.session_state.grammar_analysis = h.get("grammar_analysis")
+                st.session_state.grammar_recommendation = None
+                st.session_state.grammar_questions = []
+                st.session_state.grammar_grade = None
+                st.success("이전 문법 학습자료를 불러왔습니다.")
+                st.rerun()
+        else:
+            st.info(
+                "불러올 수 있는 문법 학습이력이 아직 없습니다. "
+                "이번 업데이트 이후 완료한 Grammar 테스트부터 원본 문법 분석 내용이 함께 저장됩니다."
+            )
+
+    if g_image_bytes is not None:
         if st.button("🔎 AI 문법 분석", type="primary", key="g_analyze"):
             try:
-                combined = combine_uploaded_images(g_images)
                 prompt = f"""
 You are a Korean English grammar learning Material Analyzer Agent.
 Analyze the uploaded grammar study pages for a {g_level} learner.
@@ -955,7 +1067,7 @@ Return JSON only:
 Keep the concepts faithful to the uploaded material.
 """
                 with st.spinner("문법 자료에서 핵심 개념을 분석하고 있어요..."):
-                    st.session_state.grammar_analysis = gemini_json(prompt, combined)
+                    st.session_state.grammar_analysis = gemini_json(prompt, g_image_bytes)
                     st.session_state.grammar_recommendation = None
                     st.session_state.grammar_questions = []
                     st.session_state.grammar_grade = None
@@ -1088,6 +1200,11 @@ Requirements:
 - Exactly one defensible correct answer for multiple-choice.
 - Include a concise Korean explanation and learning_point for every question.
 - For multiple-choice, spread correct answer positions across A/B/C/D.
+- IMPORTANT: If the Korean instruction says "밑줄 친/밑줄친" or the English instruction says "underlined",
+  you MUST put the exact target word or phrase in "highlight_word".
+- "highlight_word" MUST be an exact substring of "question" so the UI can underline it.
+- Never write an instruction referring to an underlined part unless "highlight_word" is non-empty.
+- If no underline is needed, use "highlight_word": "".
 Return JSON only as an array:
 [
  {{
@@ -1096,6 +1213,7 @@ Return JSON only as an array:
    "type_name":"Contextual Grammar",
    "format":"multiple_choice",
    "question":"...",
+   "highlight_word":"exact word or phrase in question that must be underlined, or empty string",
    "choices":["A text","B text","C text","D text"],
    "answer":0,
    "explanation":"Korean explanation",
@@ -1109,6 +1227,7 @@ For short_answer use "choices":[] and "answer":"model answer".
                         qs = gemini_json(prompt)
                         if isinstance(qs, dict):
                             qs = qs.get("questions", [])
+                        qs = repair_missing_grammar_highlights(qs)
                         st.session_state.grammar_questions = balance_answer_positions(qs)
                         st.session_state.grammar_grade = None
                         st.session_state["g_active_level"] = g_level
@@ -1124,7 +1243,7 @@ For short_answer use "choices":[] and "answer":"model answer".
         with st.form("grammar_quiz_form"):
             ganswers = {}
             for q in st.session_state.grammar_questions:
-                q_text = clean_question_text(q.get("question", ""))
+                q_text = grammar_question_display(q)
                 st.markdown(f"**{q.get('id')}. [{q.get('type_name','')}]** {q_text}")
                 if q.get("format") == "short_answer":
                     ganswers[str(q.get("id"))] = st.text_input("답", key=f"g_answer_{q.get('id')}")
@@ -1182,10 +1301,18 @@ Review cards must focus on wrong/weak grammar, not merely repeat the score.
                     st.session_state.grammar_grade = gg
                     append_history({
                         "study_type": "Grammar",
+                        "material_title": (
+                            (st.session_state.grammar_analysis or {}).get("title")
+                            or "문법 학습자료"
+                        ),
+                        "learner_level": st.session_state.get("g_active_level", g_level),
                         "test_mode": st.session_state.get("g_active_difficulty", ""),
+                        "school_mode": st.session_state.get("g_active_school", ""),
                         "question_count": gg.get("total", len(st.session_state.grammar_questions)),
                         "score": gg.get("score", 0),
                         "weak_items": gg.get("weak_topics", []),
+                        "grammar_analysis": st.session_state.grammar_analysis,
+                        "grammar_concepts_text": st.session_state.get("g_active_concepts", ""),
                     })
             except Exception as e:
                 st.error(f"문법 채점 오류: {e}")
