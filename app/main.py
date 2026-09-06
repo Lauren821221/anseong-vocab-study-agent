@@ -139,7 +139,7 @@ def extract_json(text):
         raise
 
 
-def gemini_json(prompt, image_bytes=None):
+def _gemini_json_once(prompt, image_bytes=None):
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -154,6 +154,29 @@ def gemini_json(prompt, image_bytes=None):
     return extract_json(response.text)
 
 
+
+
+def gemini_json(prompt, image_bytes=None, max_retries=3):
+    """Gemini JSON call with retry for temporary 429/503 errors."""
+    import time
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return _gemini_json_once(prompt, image_bytes)
+        except Exception as e:
+            last_error = e
+            msg = str(e)
+            transient = (
+                "503" in msg
+                or "UNAVAILABLE" in msg
+                or "429" in msg
+                or "RESOURCE_EXHAUSTED" in msg
+                or "high demand" in msg.lower()
+            )
+            if not transient or attempt == max_retries - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+    raise last_error
 def combine_uploaded_images(uploaded_images, max_width=1400, max_total_height=10000):
     """여러 이미지를 기존 /analyze 1회 호출에 사용할 수 있도록 세로로 합친다."""
     images = []
@@ -253,6 +276,250 @@ def clean_question_text(value):
     return s
 
 
+
+
+def answer_text_from_question(q):
+    """Resolve answer metadata to the actual correct choice text."""
+    choices = list(q.get("choices", []) or [])
+    raw = q.get("answer", q.get("correct_answer", q.get("correct_index")))
+
+    if isinstance(raw, dict):
+        return choice_value(raw)
+
+    if isinstance(raw, int):
+        if 0 <= raw < len(choices):
+            return choice_value(choices[raw])
+        if 1 <= raw <= len(choices):
+            return choice_value(choices[raw - 1])
+
+    if isinstance(raw, str):
+        s = raw.strip()
+        values = [choice_value(c) for c in choices]
+        if s in values:
+            return s
+
+        letters = [chr(65 + i) for i in range(len(values))]
+        if s.upper() in letters:
+            return values[letters.index(s.upper())]
+
+        if s.isdigit():
+            n = int(s)
+            if 0 <= n < len(values):
+                return values[n]
+            if 1 <= n <= len(values):
+                return values[n - 1]
+
+    return ""
+
+
+def ensure_five_choices(questions, study_kind="English"):
+    """Ensure every multiple-choice item has five unique, meaningful choices."""
+    result = []
+
+    for q in questions:
+        if q.get("format") == "short_answer":
+            result.append(q)
+            continue
+
+        choices = list(q.get("choices", []) or [])
+        values = [choice_value(c).strip() for c in choices]
+        answer_text = answer_text_from_question(q).strip()
+
+        if (
+            len(choices) == 5
+            and len(set(values)) == 5
+            and answer_text
+            and answer_text in values
+        ):
+            result.append(q)
+            continue
+
+        prompt = f"""
+You are repairing one {study_kind} multiple-choice question.
+
+STRICT REQUIREMENTS:
+1. Preserve the same tested concept, question meaning, and similar difficulty.
+2. Return exactly FIVE answer choices.
+3. All five choices must be UNIQUE.
+4. Exactly ONE choice must be correct.
+5. The correct answer MUST appear among the five choices.
+6. Use "answer" as a ZERO-BASED integer index: A=0, B=1, C=2, D=3, E=4.
+7. Preserve "highlight_word" if present.
+8. If the question refers to an underlined part, highlight_word must be an exact substring of question.
+9. Do NOT include "선택 안 함", "정답 없음", "none of the above", or equivalent choices.
+10. Return JSON only as ONE object.
+
+QUESTION:
+{json.dumps(q, ensure_ascii=False)}
+"""
+        fixed = gemini_json(prompt)
+
+        if isinstance(fixed, list):
+            fixed = fixed[0] if fixed else q
+        if isinstance(fixed, dict) and "question" in fixed:
+            q = fixed
+
+        result.append(q)
+
+    return result
+
+
+def validate_five_choice_questions(questions):
+    """Final safety gate for five-choice multiple-choice questions."""
+    bad_ids = []
+
+    for i, q in enumerate(questions):
+        if q.get("format") == "short_answer":
+            continue
+
+        choices = list(q.get("choices", []) or [])
+        values = [choice_value(c).strip() for c in choices]
+        answer_text = answer_text_from_question(q).strip()
+
+        banned = {"선택 안 함", "정답 없음", "none of the above"}
+
+        if (
+            len(choices) != 5
+            or any(not v for v in values)
+            or len(set(values)) != 5
+            or any(v.lower() in {x.lower() for x in banned} for v in values)
+            or not answer_text
+            or answer_text not in values
+        ):
+            bad_ids.append(q.get("id", i + 1))
+
+    if bad_ids:
+        raise ValueError(
+            "일부 객관식 문항을 정상적인 5지선다로 구성하지 못했습니다. "
+            f"문항: {', '.join(map(str, bad_ids))}. 문제 만들기를 다시 눌러주세요."
+        )
+
+    return questions
+
+
+def grammar_answer_text(q):
+    """Resolve a grammar answer into actual choice text."""
+    choices = list(q.get("choices", []) or [])
+    raw = q.get("answer", q.get("correct_answer", q.get("correct_index")))
+
+    if isinstance(raw, dict):
+        return choice_value(raw)
+
+    if isinstance(raw, int):
+        if 0 <= raw < len(choices):
+            return choice_value(choices[raw])
+        if 1 <= raw <= len(choices):
+            return choice_value(choices[raw - 1])
+
+    if isinstance(raw, str):
+        s = raw.strip()
+        values = [choice_value(c) for c in choices]
+        if s in values:
+            return s
+        if s.upper() in ["A", "B", "C", "D"]:
+            i = ord(s.upper()) - 65
+            if 0 <= i < len(values):
+                return values[i]
+        if s.isdigit():
+            n = int(s)
+            if 0 <= n < len(values):
+                return values[n]
+            if 1 <= n <= len(values):
+                return values[n - 1]
+
+    return ""
+
+
+def grammar_question_is_valid(q):
+    """Validate grammar question integrity before showing it."""
+    if not isinstance(q, dict):
+        return False
+
+    if q.get("format") == "short_answer":
+        return bool(str(q.get("answer", "")).strip())
+
+    choices = list(q.get("choices", []) or [])
+    if len(choices) != 5:
+        return False
+
+    values = [choice_value(c).strip() for c in choices]
+    if any(not v for v in values):
+        return False
+    if len(set(values)) != 4:
+        return False
+
+    answer_text = grammar_answer_text(q).strip()
+    if not answer_text or answer_text not in values:
+        return False
+
+    if grammar_question_needs_highlight(q):
+        highlight = (
+            q.get("highlight_word")
+            or q.get("highlight_phrase")
+            or q.get("underlined_text")
+            or q.get("target_phrase")
+            or q.get("underline")
+            or ""
+        )
+        if not highlight or str(highlight) not in str(q.get("question", "")):
+            return False
+
+    return True
+
+
+def repair_invalid_grammar_questions(questions):
+    """Regenerate only broken grammar items."""
+    bad_indexes = [i for i, q in enumerate(questions) if not grammar_question_is_valid(q)]
+    if not bad_indexes:
+        return questions
+
+    bad_items = [questions[i] for i in bad_indexes]
+
+    prompt = f"""
+Repair the following invalid English grammar quiz items.
+
+STRICT RULES:
+1. Keep the same grammar concept and similar difficulty.
+2. Multiple-choice items must have exactly 5 UNIQUE choices.
+3. There must be exactly ONE best answer.
+4. The correct answer MUST appear among the four choices.
+5. "answer" MUST be a ZERO-BASED integer index: A=0, B=1, C=2, D=3, E=4.
+6. If the instruction mentions 밑줄 친/밑줄친/underlined, include "highlight_word".
+7. "highlight_word" must be an exact substring of "question".
+8. Return ONLY a JSON array, same item count, same order.
+
+INVALID ITEMS:
+{json.dumps(bad_items, ensure_ascii=False)}
+"""
+    repaired = gemini_json(prompt)
+    if isinstance(repaired, dict):
+        repaired = repaired.get("questions", repaired.get("items", []))
+
+    if not isinstance(repaired, list) or len(repaired) != len(bad_indexes):
+        return questions
+
+    result = list(questions)
+    for i, fixed in zip(bad_indexes, repaired):
+        result[i] = fixed
+
+    return result
+
+
+def validate_grammar_questions_or_raise(questions):
+    """Final safety gate: do not expose broken grammar questions."""
+    bad_ids = [
+        q.get("id", i + 1)
+        for i, q in enumerate(questions)
+        if not grammar_question_is_valid(q)
+    ]
+    if bad_ids:
+        raise ValueError(
+            "일부 문항의 정답/보기 구성이 올바르지 않아 출제를 중단했습니다. "
+            f"문항: {', '.join(map(str, bad_ids))}. 문제 만들기를 다시 눌러주세요."
+        )
+    return questions
+
+
 def grammar_question_display(q):
     """Render grammar question text and underline the requested target phrase."""
     q_text = clean_question_text(q.get("question", ""))
@@ -313,104 +580,107 @@ QUESTIONS:
 
 
 def radio_choice(label, choices, key):
-    """Render choices cleanly while returning canonical text for grading."""
+    """Render answer choices without an artificial '선택 안 함' option."""
     choices = list(choices or [])
-    option_ids = [-1] + list(range(len(choices)))
+    option_ids = list(range(len(choices)))
 
     selected = st.radio(
         label,
         option_ids,
-        index=0,
+        index=None,
         key=key,
-        format_func=lambda i: "선택 안 함" if i == -1 else choice_display(choices[i]),
+        format_func=lambda i: choice_display(choices[i]),
     )
 
-    if selected == -1:
-        return "선택 안 함"
+    if selected is None:
+        return ""
     return choice_value(choices[selected])
 
 
 def balance_answer_positions(questions):
-    """4지선다 정답 위치를 A/B/C/D에 가능한 균등하게 재배치.
-    choices가 문자열 또는 {"text": ..., "highlight_word": ...} 딕셔너리여도 처리한다.
+    """정답 위치를 보기 개수에 맞춰 가능한 균등하게 재배치한다.
+    5지선다는 A~E에 분산하고, 기존 데이터도 안전하게 처리한다.
     """
     rng = random.SystemRandom()
-    objective = []
+    grouped = {}
 
     for q in questions:
         choices = list(q.get("choices", []) or [])
-        if q.get("format") == "short_answer" or len(choices) != 4:
+        if q.get("format") == "short_answer" or len(choices) < 2:
             continue
+
         answer_key = next(
             (k for k in ("answer", "correct_answer", "correct_index") if k in q),
             None,
         )
-        if answer_key:
-            objective.append((q, answer_key))
-
-    targets = [0, 1, 2, 3] * ((len(objective) + 3) // 4)
-    targets = targets[:len(objective)]
-    rng.shuffle(targets)
-
-    for (q, key), target in zip(objective, targets):
-        choices = list(q["choices"])
-        raw = q[key]
-        old_index = None
-        representation = "text"
-
-        if isinstance(raw, int):
-            if 0 <= raw <= 3:
-                old_index, representation = raw, "zero"
-            elif 1 <= raw <= 4:
-                old_index, representation = raw - 1, "one"
-
-        elif isinstance(raw, dict):
-            raw_value = choice_value(raw)
-            values = [choice_value(c) for c in choices]
-            if raw_value in values:
-                old_index, representation = values.index(raw_value), "dict"
-
-        elif isinstance(raw, str):
-            s = raw.strip()
-            values = [choice_value(c) for c in choices]
-
-            if s in values:
-                old_index, representation = values.index(s), "text"
-            elif s.upper() in ["A", "B", "C", "D"]:
-                old_index, representation = ord(s.upper()) - 65, "letter"
-            elif s.isdigit():
-                n = int(s)
-                if 0 <= n <= 3:
-                    old_index, representation = n, "zero_str"
-                elif 1 <= n <= 4:
-                    old_index, representation = n - 1, "one_str"
-
-        if old_index is None:
+        if not answer_key:
             continue
 
-        correct = choices[old_index]
-        distractors = [c for i, c in enumerate(choices) if i != old_index]
-        rng.shuffle(distractors)
+        grouped.setdefault(len(choices), []).append((q, answer_key))
 
-        new_choices = distractors[:]
-        new_choices.insert(target, correct)
-        q["choices"] = new_choices
+    for choice_count, objective in grouped.items():
+        targets = list(range(choice_count)) * ((len(objective) + choice_count - 1) // choice_count)
+        targets = targets[:len(objective)]
+        rng.shuffle(targets)
 
-        if representation in ("text", "dict"):
-            q[key] = choice_value(correct)
-        elif representation == "letter":
-            q[key] = chr(65 + target)
-        elif representation == "zero":
-            q[key] = target
-        elif representation == "one":
-            q[key] = target + 1
-        elif representation == "zero_str":
-            q[key] = str(target)
-        elif representation == "one_str":
-            q[key] = str(target + 1)
+        for (q, key), target in zip(objective, targets):
+            choices = list(q["choices"])
+            raw = q[key]
+            old_index = None
+            representation = "text"
+
+            if isinstance(raw, int):
+                if 0 <= raw < choice_count:
+                    old_index, representation = raw, "zero"
+                elif 1 <= raw <= choice_count:
+                    old_index, representation = raw - 1, "one"
+
+            elif isinstance(raw, dict):
+                raw_value = choice_value(raw)
+                values = [choice_value(c) for c in choices]
+                if raw_value in values:
+                    old_index, representation = values.index(raw_value), "dict"
+
+            elif isinstance(raw, str):
+                s = raw.strip()
+                values = [choice_value(c) for c in choices]
+
+                if s in values:
+                    old_index, representation = values.index(s), "text"
+                elif len(s) == 1 and s.upper() in [chr(65+i) for i in range(choice_count)]:
+                    old_index, representation = ord(s.upper()) - 65, "letter"
+                elif s.isdigit():
+                    n = int(s)
+                    if 0 <= n < choice_count:
+                        old_index, representation = n, "zero_str"
+                    elif 1 <= n <= choice_count:
+                        old_index, representation = n - 1, "one_str"
+
+            if old_index is None:
+                continue
+
+            correct = choices[old_index]
+            distractors = [c for i, c in enumerate(choices) if i != old_index]
+            rng.shuffle(distractors)
+
+            new_choices = distractors[:]
+            new_choices.insert(target, correct)
+            q["choices"] = new_choices
+
+            if representation in ("text", "dict"):
+                q[key] = choice_value(correct)
+            elif representation == "letter":
+                q[key] = chr(65 + target)
+            elif representation == "zero":
+                q[key] = target
+            elif representation == "one":
+                q[key] = target + 1
+            elif representation == "zero_str":
+                q[key] = str(target)
+            elif representation == "one_str":
+                q[key] = str(target + 1)
 
     return questions
-
 
 # ---------------------------------------------------------------------
 # 브라우저 localStorage: 사용자 이름 + 사용자별 학습 이력
@@ -834,7 +1104,12 @@ if active_page == "vocab":
                         if st.session_state.get("thread_id"):
                             payload["thread_id"] = st.session_state.thread_id
                         result = api_post("/quiz", json=payload, timeout=240)
-                        st.session_state.questions = balance_answer_positions(result.get("questions", []))
+                        vocab_qs = result.get("questions", [])
+                        vocab_qs = ensure_five_choices(vocab_qs, study_kind="Vocabulary")
+                        vocab_qs = validate_five_choice_questions(vocab_qs)
+                        vocab_qs = balance_answer_positions(vocab_qs)
+                        vocab_qs = validate_five_choice_questions(vocab_qs)
+                        st.session_state.questions = vocab_qs
                         st.session_state.grade = None
                         st.session_state["active_level"] = level
                         st.session_state["active_difficulty"] = difficulty
@@ -862,7 +1137,6 @@ if active_page == "vocab":
             submitted = st.form_submit_button("답안 제출 및 채점", type="primary")
 
         if submitted:
-            answers = {k: ("" if v == "선택 안 함" else v) for k, v in answers.items()}
             try:
                 with st.spinner("채점하고 맞춤 복습 카드를 만들고 있어요..."):
                     grade_payload = {
@@ -1200,6 +1474,10 @@ Requirements:
 - Exactly one defensible correct answer for multiple-choice.
 - Include a concise Korean explanation and learning_point for every question.
 - For multiple-choice, spread correct answer positions across A/B/C/D.
+- Every multiple-choice item must have exactly 5 UNIQUE choices.
+- There must be exactly ONE best answer.
+- The correct answer MUST appear among the four choices.
+- "answer" MUST be a zero-based integer index (A=0, B=1, C=2, D=3, E=4).
 - IMPORTANT: If the Korean instruction says "밑줄 친/밑줄친" or the English instruction says "underlined",
   you MUST put the exact target word or phrase in "highlight_word".
 - "highlight_word" MUST be an exact substring of "question" so the UI can underline it.
@@ -1214,7 +1492,7 @@ Return JSON only as an array:
    "format":"multiple_choice",
    "question":"...",
    "highlight_word":"exact word or phrase in question that must be underlined, or empty string",
-   "choices":["A text","B text","C text","D text"],
+   "choices":["A text","B text","C text","D text","E text"],
    "answer":0,
    "explanation":"Korean explanation",
    "learning_point":"Korean learning point",
@@ -1228,7 +1506,14 @@ For short_answer use "choices":[] and "answer":"model answer".
                         if isinstance(qs, dict):
                             qs = qs.get("questions", [])
                         qs = repair_missing_grammar_highlights(qs)
-                        st.session_state.grammar_questions = balance_answer_positions(qs)
+                        qs = ensure_five_choices(qs, study_kind="Grammar")
+                        qs = repair_invalid_grammar_questions(qs)
+                        qs = validate_five_choice_questions(qs)
+                        qs = validate_grammar_questions_or_raise(qs)
+                        qs = balance_answer_positions(qs)
+                        qs = validate_five_choice_questions(qs)
+                        qs = validate_grammar_questions_or_raise(qs)
+                        st.session_state.grammar_questions = qs
                         st.session_state.grammar_grade = None
                         st.session_state["g_active_level"] = g_level
                         st.session_state["g_active_difficulty"] = g_difficulty
