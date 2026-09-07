@@ -331,6 +331,9 @@ def ensure_five_choices(questions, study_kind="English"):
             and answer_text
             and answer_text in values
         ):
+            q["answer"] = values.index(answer_text)
+            q.pop("correct_answer", None)
+            q.pop("correct_index", None)
             result.append(q)
             continue
 
@@ -358,6 +361,15 @@ QUESTION:
             fixed = fixed[0] if fixed else q
         if isinstance(fixed, dict) and "question" in fixed:
             q = fixed
+
+        # 정답 메타데이터를 실제 보기 기준 zero-based index로 정규화
+        choices = list(q.get("choices", []) or [])
+        values = [choice_value(c).strip() for c in choices]
+        answer_text = answer_text_from_question(q).strip()
+        if answer_text and answer_text in values:
+            q["answer"] = values.index(answer_text)
+            q.pop("correct_answer", None)
+            q.pop("correct_index", None)
 
         result.append(q)
 
@@ -1473,7 +1485,7 @@ Requirements:
 - Sentence transformation/building may use short_answer when useful.
 - Exactly one defensible correct answer for multiple-choice.
 - Include a concise Korean explanation and learning_point for every question.
-- For multiple-choice, spread correct answer positions across A/B/C/D.
+- For multiple-choice, spread correct answer positions across A/B/C/D/E.
 - Every multiple-choice item must have exactly 5 UNIQUE choices.
 - There must be exactly ONE best answer.
 - The correct answer MUST appear among the four choices.
@@ -1505,14 +1517,44 @@ For short_answer use "choices":[] and "answer":"model answer".
                         qs = gemini_json(prompt)
                         if isinstance(qs, dict):
                             qs = qs.get("questions", [])
+                        # 1) 밑줄 메타데이터를 먼저 보정
                         qs = repair_missing_grammar_highlights(qs)
+
+                        # 2) 객관식은 모두 5지선다로 정규화
                         qs = ensure_five_choices(qs, study_kind="Grammar")
-                        qs = repair_invalid_grammar_questions(qs)
+
+                        # 3) 5지선다 기준으로만 최종 검증
+                        #    (기존 4지선다용 검증/재생성 루틴과 충돌하지 않도록 분리)
                         qs = validate_five_choice_questions(qs)
-                        qs = validate_grammar_questions_or_raise(qs)
+
+                        # 4) 정답 위치 A~E 분산
                         qs = balance_answer_positions(qs)
+
+                        # 5) 재배치 후 다시 한 번 검증
                         qs = validate_five_choice_questions(qs)
-                        qs = validate_grammar_questions_or_raise(qs)
+
+                        # 6) 밑줄 문제만 별도로 무결성 확인
+                        bad_highlight_ids = []
+                        for i, q in enumerate(qs):
+                            if grammar_question_needs_highlight(q):
+                                highlight = (
+                                    q.get("highlight_word")
+                                    or q.get("highlight_phrase")
+                                    or q.get("underlined_text")
+                                    or q.get("target_phrase")
+                                    or q.get("underline")
+                                    or ""
+                                )
+                                if not highlight or str(highlight) not in str(q.get("question", "")):
+                                    bad_highlight_ids.append(q.get("id", i + 1))
+
+                        if bad_highlight_ids:
+                            raise ValueError(
+                                "일부 문항의 밑줄 표시 정보를 확인하지 못했습니다. "
+                                f"문항: {', '.join(map(str, bad_highlight_ids))}. "
+                                "문제 만들기를 다시 눌러주세요."
+                            )
+
                         st.session_state.grammar_questions = qs
                         st.session_state.grammar_grade = None
                         st.session_state["g_active_level"] = g_level
