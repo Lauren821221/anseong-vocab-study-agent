@@ -157,26 +157,67 @@ def _gemini_json_once(prompt, image_bytes=None):
 
 
 def gemini_json(prompt, image_bytes=None, max_retries=3):
-    """Gemini JSON call with retry for temporary 429/503 errors."""
+    """Gemini JSON call with retry only for temporary service errors.
+    Hard quota exhaustion (free-tier daily/request quota) is NOT retried.
+    """
     import time
     last_error = None
+
     for attempt in range(max_retries):
         try:
             return _gemini_json_once(prompt, image_bytes)
         except Exception as e:
             last_error = e
             msg = str(e)
+            low = msg.lower()
+
+            hard_quota = (
+                "quota exceeded" in low
+                or "free_tier_requests" in low
+                or "generatecontent_free_tier_requests" in low
+                or "perdayperprojectpermodel" in low
+            )
+            if hard_quota:
+                raise
+
             transient = (
                 "503" in msg
                 or "UNAVAILABLE" in msg
-                or "429" in msg
-                or "RESOURCE_EXHAUSTED" in msg
-                or "high demand" in msg.lower()
+                or "high demand" in low
+                or (
+                    ("429" in msg or "RESOURCE_EXHAUSTED" in msg)
+                    and ("retry" in low or "rate" in low)
+                )
             )
+
             if not transient or attempt == max_retries - 1:
                 raise
+
             time.sleep(2 * (attempt + 1))
+
     raise last_error
+def is_gemini_hard_quota_error(error):
+    msg = str(error).lower()
+    return (
+        "quota exceeded" in msg
+        or "free_tier_requests" in msg
+        or "generatecontent_free_tier_requests" in msg
+        or "perdayperprojectpermodel" in msg
+    )
+
+
+def show_ai_error(prefix, error):
+    """Show a concise message instead of raw Gemini quota payload."""
+    if is_gemini_hard_quota_error(error):
+        st.error(
+            f"{prefix}: 오늘 사용할 수 있는 Gemini 무료 API 요청 한도를 모두 사용했습니다. "
+            "무료 한도가 초기화된 뒤 다시 시도하거나, Gemini API의 결제/쿼터를 늘려야 합니다."
+        )
+    else:
+        st.error(f"{prefix}: {error}")
+
+
+
 def combine_uploaded_images(uploaded_images, max_width=1400, max_total_height=10000):
     """여러 이미지를 기존 /analyze 1회 호출에 사용할 수 있도록 세로로 합친다."""
     images = []
@@ -313,56 +354,77 @@ def answer_text_from_question(q):
 
 
 def ensure_five_choices(questions, study_kind="English"):
-    """Ensure every multiple-choice item has five unique, meaningful choices."""
-    result = []
+    """Ensure every MCQ has exactly five unique choices.
+    All invalid items are repaired in ONE Gemini request to minimize quota usage.
+    """
+    questions = list(questions or [])
+    invalid_indexes = []
 
-    for q in questions:
+    for i, q in enumerate(questions):
         if q.get("format") == "short_answer":
-            result.append(q)
             continue
 
         choices = list(q.get("choices", []) or [])
         values = [choice_value(c).strip() for c in choices]
         answer_text = answer_text_from_question(q).strip()
 
-        if (
+        valid = (
             len(choices) == 5
             and len(set(values)) == 5
             and answer_text
             and answer_text in values
-        ):
+        )
+
+        if valid:
             q["answer"] = values.index(answer_text)
             q.pop("correct_answer", None)
             q.pop("correct_index", None)
-            result.append(q)
-            continue
+        else:
+            invalid_indexes.append(i)
 
-        prompt = f"""
-You are repairing one {study_kind} multiple-choice question.
+    if not invalid_indexes:
+        return questions
+
+    invalid_items = [questions[i] for i in invalid_indexes]
+
+    prompt = f"""
+You are repairing {study_kind} multiple-choice quiz items.
+
+Repair ALL supplied items in ONE response.
 
 STRICT REQUIREMENTS:
-1. Preserve the same tested concept, question meaning, and similar difficulty.
-2. Return exactly FIVE answer choices.
-3. All five choices must be UNIQUE.
+1. Preserve each item's tested concept, meaning, type, and similar difficulty.
+2. Each multiple-choice item must have exactly FIVE answer choices.
+3. All five choices must be UNIQUE and plausible.
 4. Exactly ONE choice must be correct.
 5. The correct answer MUST appear among the five choices.
 6. Use "answer" as a ZERO-BASED integer index: A=0, B=1, C=2, D=3, E=4.
-7. Preserve "highlight_word" if present.
-8. If the question refers to an underlined part, highlight_word must be an exact substring of question.
-9. Do NOT include "선택 안 함", "정답 없음", "none of the above", or equivalent choices.
-10. Return JSON only as ONE object.
+7. Do NOT include "선택 안 함", "정답 없음", "none of the above", or equivalents.
+8. Preserve existing highlight metadata for ordinary underline questions.
+9. For Error Detection / 오류 찾기, do NOT underline or visually reveal the incorrect target.
+   Use "highlight_word": "" and do not say "underlined".
+10. Return ONLY a JSON array with the SAME number of items and SAME order.
 
-QUESTION:
-{json.dumps(q, ensure_ascii=False)}
+ITEMS:
+{json.dumps(invalid_items, ensure_ascii=False)}
 """
-        fixed = gemini_json(prompt)
 
-        if isinstance(fixed, list):
-            fixed = fixed[0] if fixed else q
-        if isinstance(fixed, dict) and "question" in fixed:
-            q = fixed
+    repaired = gemini_json(prompt)
+    if isinstance(repaired, dict):
+        repaired = repaired.get("questions", repaired.get("items", []))
 
-        # 정답 메타데이터를 실제 보기 기준 zero-based index로 정규화
+    if not isinstance(repaired, list) or len(repaired) != len(invalid_indexes):
+        raise ValueError("5지선다 보정 결과 형식이 올바르지 않습니다. 다시 문제 만들기를 눌러주세요.")
+
+    result = list(questions)
+    for idx, fixed in zip(invalid_indexes, repaired):
+        if isinstance(fixed, dict):
+            result[idx] = fixed
+
+    # Normalize answer metadata after the batch repair.
+    for q in result:
+        if q.get("format") == "short_answer":
+            continue
         choices = list(q.get("choices", []) or [])
         values = [choice_value(c).strip() for c in choices]
         answer_text = answer_text_from_question(q).strip()
@@ -370,8 +432,6 @@ QUESTION:
             q["answer"] = values.index(answer_text)
             q.pop("correct_answer", None)
             q.pop("correct_index", None)
-
-        result.append(q)
 
     return result
 
@@ -532,9 +592,24 @@ def validate_grammar_questions_or_raise(questions):
     return questions
 
 
+def grammar_is_error_detection(q):
+    """Error Detection 문항인지 판별."""
+    type_name = str(q.get("type_name", "")).lower()
+    question = str(q.get("question", "")).lower()
+    return (
+        "error detection" in type_name
+        or "오류 찾기" in type_name
+        or "어법 오류" in type_name
+        or ("identify" in question and "incorrect" in question)
+        or "문법적으로 적절하지 않은" in question
+    )
+
+
 def grammar_question_display(q):
-    """Render grammar question text and underline the requested target phrase."""
+    """문법 문제 표시. Error Detection에서는 정답을 노출할 수 있는 밑줄을 표시하지 않는다."""
     q_text = clean_question_text(q.get("question", ""))
+    if grammar_is_error_detection(q):
+        return q_text
     highlight = (
         q.get("highlight_word")
         or q.get("highlight_phrase")
@@ -547,7 +622,9 @@ def grammar_question_display(q):
 
 
 def grammar_question_needs_highlight(q):
-    """Detect questions whose instruction explicitly refers to an underlined part."""
+    """밑줄이 실제로 필요한 문제인지 판별. Error Detection은 정답 노출 방지를 위해 제외."""
+    if grammar_is_error_detection(q):
+        return False
     q_text = str(q.get("question", ""))
     markers = ["밑줄", "underlined", "underline", "밑줄 친", "밑줄친"]
     return any(m.lower() in q_text.lower() for m in markers)
@@ -1127,7 +1204,7 @@ if active_page == "vocab":
                         st.session_state["active_difficulty"] = difficulty
                         st.session_state["active_school_mode"] = school_mode
                 except Exception as e:
-                    st.error(f"문제 생성 오류: {e}")
+                    show_ai_error("문제 생성 오류", e)
 
     if st.session_state.questions:
         st.divider()
@@ -1358,7 +1435,7 @@ Keep the concepts faithful to the uploaded material.
                     st.session_state.grammar_questions = []
                     st.session_state.grammar_grade = None
             except Exception as e:
-                st.error(f"문법 분석 오류: {e}")
+                show_ai_error("문법 분석 오류", e)
 
     if st.session_state.grammar_analysis:
         ga = st.session_state.grammar_analysis
@@ -1494,6 +1571,13 @@ Requirements:
   you MUST put the exact target word or phrase in "highlight_word".
 - "highlight_word" MUST be an exact substring of "question" so the UI can underline it.
 - Never write an instruction referring to an underlined part unless "highlight_word" is non-empty.
+- EXCEPTION — Error Detection / 오류 찾기:
+  Do NOT underline or visually mark the incorrect answer target in the sentence.
+  The learner must identify the incorrect word or phrase from the five choices.
+  Use "highlight_word": "".
+  Do NOT say "identify the underlined word" or "밑줄 친 부분".
+  Instead say "Identify the grammatically incorrect word or phrase in the sentence."
+  or "다음 문장에서 문법적으로 적절하지 않은 부분을 고르세요."
 - If no underline is needed, use "highlight_word": "".
 Return JSON only as an array:
 [
@@ -1562,7 +1646,7 @@ For short_answer use "choices":[] and "answer":"model answer".
                         st.session_state["g_active_school"] = g_school
                         st.session_state["g_active_concepts"] = edited_concepts
                 except Exception as e:
-                    st.error(f"문법 문제 생성 오류: {e}")
+                    show_ai_error("문법 문제 생성 오류", e)
 
     if st.session_state.grammar_questions:
         st.divider()
@@ -1642,7 +1726,7 @@ Review cards must focus on wrong/weak grammar, not merely repeat the score.
                         "grammar_concepts_text": st.session_state.get("g_active_concepts", ""),
                     })
             except Exception as e:
-                st.error(f"문법 채점 오류: {e}")
+                show_ai_error("문법 채점 오류", e)
 
     if st.session_state.grammar_grade:
         st.divider()
