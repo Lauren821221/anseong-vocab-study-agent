@@ -1159,10 +1159,21 @@ if active_page == "vocab":
             analyze_name = "combined_material.jpg"
 
     elif source_mode == "📷 카메라로 촬영":
-        image = st.camera_input("학습자료 촬영", key=f"cam_{st.session_state.upload_nonce}")
-        if image is not None:
-            analyze_bytes = image.getvalue()
-            analyze_name = "camera.jpg"
+        st.caption(
+            "📱 휴대폰/태블릿에서는 아래 버튼을 누른 뒤 **카메라/사진 찍기**를 선택하세요. "
+            "브라우저 셀프카메라 대신 기기의 기본 카메라가 열리므로 책을 찍기 좋은 **후면 카메라**를 사용할 수 있어요."
+        )
+        camera_images = st.file_uploader(
+            "📷 책 사진 촬영 또는 선택",
+            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+            accept_multiple_files=True,
+            key=f"cam_upload_{st.session_state.upload_nonce}",
+            help="모바일에서는 '카메라/사진 찍기'를 선택해 후면 카메라로 촬영하세요. 여러 페이지도 선택할 수 있습니다.",
+        )
+        if camera_images:
+            st.caption(f"촬영/선택된 사진: {len(camera_images)}장")
+            analyze_bytes = combine_uploaded_images(camera_images)
+            analyze_name = "camera_material.jpg"
 
     else:
         try:
@@ -1540,12 +1551,20 @@ if active_page == "grammar":
             g_image_bytes = combine_uploaded_images(g_images)
 
     elif g_source_mode == "📷 카메라로 촬영":
-        g_camera = st.camera_input(
-            "문법 학습자료 촬영",
-            key=f"g_camera_{st.session_state.grammar_upload_nonce}",
+        st.caption(
+            "📱 휴대폰/태블릿에서는 아래 버튼을 누른 뒤 **카메라/사진 찍기**를 선택하세요. "
+            "브라우저 셀프카메라 대신 기기의 기본 카메라가 열리므로 책을 찍기 좋은 **후면 카메라**를 사용할 수 있어요."
         )
-        if g_camera is not None:
-            g_image_bytes = g_camera.getvalue()
+        g_camera_images = st.file_uploader(
+            "📷 문법 책 사진 촬영 또는 선택",
+            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+            accept_multiple_files=True,
+            key=f"g_cam_upload_{st.session_state.grammar_upload_nonce}",
+            help="모바일에서는 '카메라/사진 찍기'를 선택해 후면 카메라로 촬영하세요. 여러 페이지도 선택할 수 있습니다.",
+        )
+        if g_camera_images:
+            st.caption(f"촬영/선택된 사진: {len(g_camera_images)}장")
+            g_image_bytes = combine_uploaded_images(g_camera_images)
 
     else:
         grammar_histories = [
