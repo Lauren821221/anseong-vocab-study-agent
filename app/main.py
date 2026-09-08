@@ -3,6 +3,7 @@ import io
 import json
 import random
 import re
+import copy
 from datetime import datetime
 
 import requests
@@ -1006,6 +1007,116 @@ if active_page == "home":
                 st.session_state.active_page = "history"
                 st.rerun()
 
+
+def normalize_answer_text(value):
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def prepare_vocab_grade_questions(questions):
+    """Backend 호환용: 객관식 정답을 실제 보기 텍스트로 변환해 전달."""
+    prepared = copy.deepcopy(list(questions or []))
+
+    for q in prepared:
+        if q.get("format") == "short_answer":
+            continue
+
+        correct_text = answer_text_from_question(q).strip()
+        if correct_text:
+            q["answer"] = correct_text
+            q.pop("correct_answer", None)
+            q.pop("correct_index", None)
+
+    return prepared
+
+
+def local_vocab_objective_result(questions, answers):
+    """Vocabulary 객관식 로컬 확정 채점."""
+    return local_objective_result(questions, answers)
+
+
+def local_objective_result(questions, answers):
+    """객관식 문제는 AI가 아니라 코드로 확정 채점한다."""
+    details = []
+    correct_count = 0
+    objective_count = 0
+    has_short_answer = False
+    unanswered_ids = []
+
+    for q in questions:
+        qid = str(q.get("id", ""))
+
+        if q.get("format") == "short_answer":
+            has_short_answer = True
+            if not str(answers.get(qid, "") or "").strip():
+                unanswered_ids.append(q.get("id"))
+            continue
+
+        objective_count += 1
+        correct_text = answer_text_from_question(q).strip()
+        user_text = str(answers.get(qid, "") or "").strip()
+
+        if not user_text:
+            unanswered_ids.append(q.get("id"))
+
+        is_correct = (
+            bool(user_text)
+            and bool(correct_text)
+            and normalize_answer_text(user_text) == normalize_answer_text(correct_text)
+        )
+
+        if is_correct:
+            correct_count += 1
+
+        details.append({
+            "id": q.get("id"),
+            "correct": is_correct,
+            "user_answer": user_text,
+            "answer": correct_text,
+        })
+
+    return {
+        "all_objective": objective_count > 0 and not has_short_answer,
+        "has_short_answer": has_short_answer,
+        "objective_count": objective_count,
+        "correct_count": correct_count,
+        "details": details,
+        "score": round((correct_count / objective_count) * 100) if objective_count else 0,
+        "unanswered_ids": unanswered_ids,
+    }
+
+
+def merge_local_objective_grade(ai_result, local_check, *, weak_key, review_key):
+    """AI 결과의 설명/복습은 유지하되 객관식 점수·정오표는 코드 결과로 확정한다."""
+    result = dict(ai_result or {})
+
+    if local_check.get("all_objective"):
+        result["correct_count"] = local_check["correct_count"]
+        result["total"] = local_check["objective_count"]
+        result["score"] = local_check["score"]
+
+        ai_details = {
+            str(x.get("id")): x
+            for x in result.get("details", [])
+            if isinstance(x, dict)
+        }
+
+        merged_details = []
+        for d in local_check["details"]:
+            merged = dict(ai_details.get(str(d.get("id")), {}))
+            merged.update(d)
+            merged_details.append(merged)
+
+        result["details"] = merged_details
+
+        if local_check["correct_count"] == local_check["objective_count"]:
+            result[weak_key] = []
+            result[review_key] = []
+
+    return result
+
+
+
+
 # ---------------------------------------------------------------------
 # Vocabulary - 기존 서비스 흐름 유지
 # ---------------------------------------------------------------------
@@ -1226,42 +1337,106 @@ if active_page == "vocab":
             submitted = st.form_submit_button("답안 제출 및 채점", type="primary")
 
         if submitted:
-            try:
-                with st.spinner("채점하고 맞춤 복습 카드를 만들고 있어요..."):
-                    grade_payload = {
-                        "questions": st.session_state.questions,
-                        "answers": answers,
-                        "material_id": st.session_state.get("material_id"),
-                        "material_title": st.session_state.get("material_title"),
-                        "learner_level": st.session_state.get("active_level"),
-                        "difficulty": st.session_state.get("active_difficulty"),
-                        "school_mode": st.session_state.get("active_school_mode"),
-                    }
-                    try:
-                        result = api_post("/grade", json=grade_payload, timeout=240)
-                    except Exception:
-                        # 구버전 backend 계약 호환
-                        grade_payload = {
-                            "learner_level": st.session_state.get("active_level", "초등 저학년"),
-                            "difficulty": st.session_state.get("active_difficulty", "보통"),
-                            "school_mode": st.session_state.get("active_school_mode", "적용 안 함"),
-                            "title": st.session_state.material_title,
-                            "words": st.session_state.analysis["words"],
-                            "type_ids": st.session_state.selected_types,
-                            "questions": st.session_state.questions,
-                            "answers": answers,
-                        }
-                        result = api_post("/grade", json=grade_payload, timeout=240)
-                    st.session_state.grade = result
-                    append_history({
-                        "study_type": "Vocabulary",
-                        "test_mode": st.session_state.get("active_difficulty", ""),
-                        "question_count": result.get("total", len(st.session_state.questions)),
-                        "score": result.get("score", 0),
-                        "weak_items": result.get("weak_words", []),
-                    })
-            except Exception as e:
-                st.error(f"채점 오류: {e}")
+            local_check = local_objective_result(
+                st.session_state.questions,
+                answers,
+            )
+
+            if local_check.get("unanswered_ids"):
+                st.warning(
+                    "아직 답을 선택하지 않은 문항이 있어요: "
+                    + ", ".join(map(str, local_check["unanswered_ids"]))
+                    + "번. 모든 문제에 답한 뒤 채점해주세요."
+                )
+            else:
+                try:
+                    with st.spinner("채점하고 맞춤 복습 카드를 만들고 있어요..."):
+                        grade_questions = prepare_vocab_grade_questions(
+                            st.session_state.questions
+                        )
+
+                        # 전부 맞은 객관식은 AI/backend 호출 없이 코드로 바로 확정.
+                        if (
+                            local_check.get("all_objective")
+                            and local_check["correct_count"] == local_check["objective_count"]
+                        ):
+                            result = {
+                                "score": 100,
+                                "correct_count": local_check["correct_count"],
+                                "total": local_check["objective_count"],
+                                "details": local_check["details"],
+                                "weak_words": [],
+                                "review": [],
+                            }
+                        else:
+                            grade_payload = {
+                                "questions": grade_questions,
+                                "answers": answers,
+                                "material_id": st.session_state.get("material_id"),
+                                "material_title": st.session_state.get("material_title"),
+                                "learner_level": st.session_state.get("active_level"),
+                                "difficulty": st.session_state.get("active_difficulty"),
+                                "school_mode": st.session_state.get("active_school_mode"),
+                            }
+
+                            result = None
+                            backend_error = None
+
+                            try:
+                                result = api_post("/grade", json=grade_payload, timeout=240)
+                            except Exception as e1:
+                                backend_error = e1
+                                try:
+                                    # 구버전 backend 계약 호환
+                                    legacy_payload = {
+                                        "learner_level": st.session_state.get("active_level", "초등 저학년"),
+                                        "difficulty": st.session_state.get("active_difficulty", "보통"),
+                                        "school_mode": st.session_state.get("active_school_mode", "적용 안 함"),
+                                        "title": st.session_state.material_title,
+                                        "words": st.session_state.analysis["words"],
+                                        "type_ids": st.session_state.selected_types,
+                                        "questions": grade_questions,
+                                        "answers": answers,
+                                    }
+                                    result = api_post("/grade", json=legacy_payload, timeout=240)
+                                    backend_error = None
+                                except Exception as e2:
+                                    backend_error = e2
+
+                            # 객관식은 backend가 실패해도 점수 자체는 안전하게 제공.
+                            if result is None and local_check.get("all_objective"):
+                                result = {
+                                    "score": local_check["score"],
+                                    "correct_count": local_check["correct_count"],
+                                    "total": local_check["objective_count"],
+                                    "details": local_check["details"],
+                                    "weak_words": [],
+                                    "review": [],
+                                }
+                                st.info(
+                                    "점수는 정상적으로 계산했습니다. "
+                                    "다만 복습 카드 생성 서버 응답이 없어 이번에는 복습 카드가 생략됐어요."
+                                )
+                            elif result is None:
+                                raise backend_error or RuntimeError("채점 서버 응답이 없습니다.")
+
+                            result = merge_local_objective_grade(
+                                result,
+                                local_check,
+                                weak_key="weak_words",
+                                review_key="review",
+                            )
+
+                        st.session_state.grade = result
+                        append_history({
+                            "study_type": "Vocabulary",
+                            "test_mode": st.session_state.get("active_difficulty", ""),
+                            "question_count": result.get("total", len(st.session_state.questions)),
+                            "score": result.get("score", 0),
+                            "weak_items": result.get("weak_words", []),
+                        })
+                except Exception as e:
+                    st.error(f"채점 오류: {e}")
 
     if st.session_state.grade:
         st.divider()
@@ -1668,11 +1843,39 @@ For short_answer use "choices":[] and "answer":"model answer".
             gsubmitted = st.form_submit_button("답안 제출 및 채점", type="primary")
 
         if gsubmitted:
-            clean_answers = {k: ("" if v == "선택 안 함" else v) for k, v in ganswers.items()}
-            try:
-                prompt = f"""
-You are a Grammar Grader and Study Coach.
-Grade the learner's answers and create focused review cards.
+            clean_answers = {k: str(v or "").strip() for k, v in ganswers.items()}
+            local_check = local_objective_result(
+                st.session_state.grammar_questions,
+                clean_answers,
+            )
+
+            if local_check.get("unanswered_ids"):
+                st.warning(
+                    "아직 답을 선택하지 않은 문항이 있어요: "
+                    + ", ".join(map(str, local_check["unanswered_ids"]))
+                    + "번. 모든 문제에 답한 뒤 채점해주세요."
+                )
+            else:
+                try:
+                    # 객관식이 전부 정답이면 AI 채점/복습 호출 자체를 생략.
+                    if (
+                        local_check.get("all_objective")
+                        and local_check["correct_count"] == local_check["objective_count"]
+                    ):
+                        gg = {
+                            "score": 100,
+                            "correct_count": local_check["correct_count"],
+                            "total": local_check["objective_count"],
+                            "weak_topics": [],
+                            "category_scores": {},
+                            "details": local_check["details"],
+                            "review_cards": [],
+                        }
+                    else:
+                        prompt = f"""
+You are a Grammar Study Coach.
+The application has already calculated objective-question correctness deterministically.
+Your primary job is to create explanations and focused review cards.
 
 Questions:
 {json.dumps(st.session_state.grammar_questions, ensure_ascii=False)}
@@ -1704,11 +1907,38 @@ Return JSON only:
    }}
  ]
 }}
-Score must be percentage 0-100.
-Review cards must focus on wrong/weak grammar, not merely repeat the score.
+
+Focus review cards on wrong/weak grammar.
+Do not change the question choices.
 """
-                with st.spinner("채점하고 틀린 문법 복습 카드를 만들고 있어요..."):
-                    gg = gemini_json(prompt)
+                        try:
+                            with st.spinner("채점 결과를 정리하고 틀린 문법 복습 카드를 만들고 있어요..."):
+                                gg = gemini_json(prompt)
+                        except Exception as ai_error:
+                            if local_check.get("all_objective"):
+                                gg = {
+                                    "score": local_check["score"],
+                                    "correct_count": local_check["correct_count"],
+                                    "total": local_check["objective_count"],
+                                    "weak_topics": [],
+                                    "category_scores": {},
+                                    "details": local_check["details"],
+                                    "review_cards": [],
+                                }
+                                st.info(
+                                    "점수는 정상적으로 계산했습니다. "
+                                    "AI 복습 카드 생성이 일시적으로 실패해 이번에는 복습 카드만 생략됐어요."
+                                )
+                            else:
+                                raise ai_error
+
+                        gg = merge_local_objective_grade(
+                            gg,
+                            local_check,
+                            weak_key="weak_topics",
+                            review_key="review_cards",
+                        )
+
                     st.session_state.grammar_grade = gg
                     append_history({
                         "study_type": "Grammar",
@@ -1725,8 +1955,8 @@ Review cards must focus on wrong/weak grammar, not merely repeat the score.
                         "grammar_analysis": st.session_state.grammar_analysis,
                         "grammar_concepts_text": st.session_state.get("g_active_concepts", ""),
                     })
-            except Exception as e:
-                show_ai_error("문법 채점 오류", e)
+                except Exception as e:
+                    show_ai_error("문법 채점 오류", e)
 
     if st.session_state.grammar_grade:
         st.divider()
