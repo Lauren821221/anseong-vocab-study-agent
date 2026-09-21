@@ -14,15 +14,9 @@ from google.genai import types
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-GEMINI_FALLBACK_MODELS = [
-    m.strip()
-    for m in os.getenv(
-        "GEMINI_FALLBACK_MODELS",
-        "gemini-3.7-flash,gemini-3.8-flash",
-    ).split(",")
-    if m.strip() and m.strip() != GEMINI_MODEL
-]
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite"]
+
 
 try:
     from streamlit_js_eval import streamlit_js_eval
@@ -170,65 +164,34 @@ def _gemini_json_once(prompt, image_bytes=None, model=None):
 
 
 
-def gemini_json(prompt, image_bytes=None, max_retries=3):
-    """Gemini JSON call with retry and stable-model fallback for 503 only."""
-    import time
-
-    def _flags(error):
-        msg = str(error)
-        low = msg.lower()
-        hard_quota = (
-            "quota exceeded" in low
-            or "free_tier_requests" in low
-            or "generatecontent_free_tier_requests" in low
-            or "perdayperprojectpermodel" in low
-        )
-        unavailable = (
-            "503" in msg
-            or "unavailable" in low
-            or "high demand" in low
-            or "overloaded" in low
-        )
-        transient_rate = (
-            ("429" in msg or "resource_exhausted" in low)
-            and not hard_quota
-            and ("retry" in low or "rate" in low)
-        )
-        return hard_quota, unavailable, transient_rate
-
-    models = [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
+def gemini_json(prompt, image_bytes=None, max_retries=2):
+    """Use one production model and one lightweight fallback."""
     last_error = None
-
-    for model_index, model_name in enumerate(models):
-        attempts = max(1, max_retries) if model_index == 0 else 1
-
-        for attempt in range(attempts):
-            try:
-                return _gemini_json_once(prompt, image_bytes=image_bytes, model=model_name)
-            except Exception as e:
-                last_error = e
-                hard_quota, unavailable, transient_rate = _flags(e)
-
-                # Do not bypass a real account/free-tier quota limit with another model.
-                if hard_quota:
-                    raise
-
-                # 503/high-demand: retry primary, then try the next stable Flash model.
-                if unavailable:
-                    if model_index == 0 and attempt < attempts - 1:
-                        time.sleep(2 * (attempt + 1))
-                        continue
-                    break
-
-                if transient_rate:
-                    if attempt < attempts - 1:
-                        time.sleep(2 * (attempt + 1))
-                        continue
-                    raise
-
-                # Auth/request/model errors are not hidden by fallback.
+    for model_name in [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]:
+        try:
+            return _gemini_json_once(prompt, image_bytes=image_bytes, model=model_name)
+        except Exception as e:
+            last_error = e
+            msg = str(e)
+            low = msg.lower()
+            hard_quota = (
+                "quota exceeded" in low
+                or "free_tier_requests" in low
+                or "generatecontent_free_tier_requests" in low
+                or "perdayperprojectpermodel" in low
+            )
+            if hard_quota:
                 raise
-
+            temporary = (
+                "503" in msg
+                or "unavailable" in low
+                or "high demand" in low
+                or "overloaded" in low
+                or "timeout" in low
+            )
+            if temporary:
+                continue
+            raise
     raise last_error
 
 
@@ -255,7 +218,7 @@ def show_ai_error(prefix, error):
         if "503" in msg or "unavailable" in low or "high demand" in low or "overloaded" in low:
             st.error(
                 f"{prefix}: 지금 AI 사용량이 많아 연결이 어렵습니다. "
-                "기본 모델과 대체 모델까지 자동으로 시도했지만 모두 응답하지 않았습니다. "
+                "기본 AI와 예비 AI까지 자동으로 시도했지만 현재 응답이 지연되고 있습니다. "
                 "잠시 후 다시 눌러주세요. 업로드한 자료는 그대로 유지됩니다."
             )
         else:
