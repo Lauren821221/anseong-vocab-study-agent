@@ -1646,13 +1646,23 @@ Return JSON only:
         if ra.get("readability_note"):
             st.caption("사진 판독 상태: " + str(ra.get("readability_note")))
 
-        st.subheader("③ 문제 스타일 선택")
+        st.subheader("③ 출제 수준 · 난이도 선택")
         r_style = st.radio(
-            "출제 스타일",
-            ["TOEFL Junior 유형", "TOEFL 유형", "최선어학원 유형"],
+            "출제 수준",
+            ["현재 원서 수준", "TOEFL Junior 유형", "TOEFL 유형", "최선어학원 유형"],
             horizontal=True,
             key="r_style",
-            help="공식/실제 기출문제를 복제하지 않고, 각 시험·학원에서 연습하는 독해 사고방식을 참고한 새 문제를 만듭니다.",
+            help="현재 원서 수준은 업로드한 글 자체의 난이도에 맞추고, 나머지는 해당 시험·학원에서 연습하는 독해 사고방식을 반영합니다.",
+        )
+        r_difficulty = st.radio(
+            "난이도",
+            ["쉬움", "보통", "어려움"],
+            index=1,
+            horizontal=True,
+            key="r_difficulty",
+        )
+        st.caption(
+            f"현재 설정: {r_level} · {r_style} · {r_difficulty}"
         )
 
         st.subheader("④ 문제 유형 선택")
@@ -1698,12 +1708,20 @@ You are an English Reading Question Writer for a Korean {r_level} learner.
 SOURCE ANALYSIS OF THE UPLOADED PAGES:
 {json.dumps(ra, ensure_ascii=False)}
 
+Learner level: {r_level}
 Practice style: {r_style}
+Difficulty: {r_difficulty}
 Selected question types:
 {json.dumps(chosen, ensure_ascii=False)}
 Question count: {r_count}
 
 Create ORIGINAL reading-comprehension questions based ONLY on the uploaded-page analysis above.
+
+Difficulty calibration:
+- 쉬움: make evidence relatively direct and distractors clearly distinguishable, while still requiring reading comprehension.
+- 보통: use plausible distractors and require careful reading of context and relationships.
+- 어려움: use close distractors, multi-sentence evidence, and deeper inference appropriate to the learner level.
+- 현재 원서 수준: calibrate question language and reasoning primarily to the uploaded material itself while still considering the learner level.
 
 Rules:
 - Never use knowledge from later chapters, the full book, a movie, summaries, or the internet.
@@ -1768,6 +1786,7 @@ Return JSON only:
                     st.session_state.reading_grade = None
                     st.session_state["r_active_level"] = r_level
                     st.session_state["r_active_style"] = r_style
+                    st.session_state["r_active_difficulty"] = r_difficulty
             except Exception as e:
                 show_ai_error("Reading 문제 생성 오류", e)
 
@@ -1837,6 +1856,7 @@ Return JSON only:
                     ),
                     "learner_level": st.session_state.get("r_active_level", r_level),
                     "test_mode": st.session_state.get("r_active_style", ""),
+                    "difficulty": st.session_state.get("r_active_difficulty", "보통"),
                     "question_count": rg["total"],
                     "score": rg["score"],
                     "weak_items": rg["weak_topics"],
