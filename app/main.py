@@ -14,7 +14,7 @@ from google.genai import types
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 try:
     from streamlit_js_eval import streamlit_js_eval
@@ -90,6 +90,11 @@ for key, default in {
     "grammar_grade": None,
     "grammar_selected_types": [],
     "grammar_upload_nonce": 0,
+    "reading_analysis": None,
+    "reading_questions": [],
+    "reading_grade": None,
+    "reading_selected_types": [],
+    "reading_upload_nonce": 0,
     "local_history": [],
     "learner_name": "",
     "history_loaded": False,
@@ -862,7 +867,7 @@ load_browser_profile()
 # 홈
 # ---------------------------------------------------------------------
 st.title("📚 안성맞춤 수준별 영어 스터디 에이전트")
-st.caption("Vocabulary와 Grammar를 학습하고, AI 추천 문제·채점·복습·재시험까지 연결합니다.")
+st.caption("Vocabulary · Grammar · Reading을 학습하고, AI 문제 생성·채점·복습·학습 이력까지 연결합니다.")
 
 
 
@@ -872,11 +877,12 @@ if "active_page" not in st.session_state:
 active_page = st.session_state.active_page
 
 # One-page navigation: no URL links, no new page/tab.
-nav_cols = st.columns(4)
+nav_cols = st.columns(5)
 nav_items = [
     ("🏠 홈", "home"),
-    ("📘 Vocabulary 학습", "vocab"),
-    ("✏️ Grammar 학습", "grammar"),
+    ("📘 Vocabulary", "vocab"),
+    ("✏️ Grammar", "grammar"),
+    ("📖 Reading", "reading"),
     ("📊 학습 이력", "history"),
 ]
 for col, (label, page_key) in zip(nav_cols, nav_items):
@@ -934,9 +940,8 @@ if active_page == "home":
     st.divider()
 
     # Same-page clickable cards
-    # 카드 전체 높이뿐 아니라 제목/설명/보조문구 영역도 같은 높이로 맞춰
-    # 세 카드의 버튼 위치까지 정확히 정렬합니다.
-    c1, c2, c3 = st.columns(3)
+    # 네 학습/이력 카드의 높이와 버튼 위치를 맞춥니다.
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
         with st.container(border=True, height=320):
@@ -986,6 +991,29 @@ if active_page == "home":
 
     with c3:
         with st.container(border=True, height=320):
+            st.markdown("### 📖 Reading 학습")
+            st.markdown(
+                '<div style="height:64px; font-size:18px; line-height:1.55;">'
+                '읽은 영어원서 페이지를 바탕으로 리딩 문제를 만듭니다.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="height:64px; color:#8b8f97; font-size:15px; line-height:1.5;">'
+                'TOEFL Junior · TOEFL · 최선형 · Main Idea · Inference'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "Reading 학습 열기",
+                key="home_card_reading",
+                use_container_width=True,
+            ):
+                st.session_state.active_page = "reading"
+                st.rerun()
+
+    with c4:
+        with st.container(border=True, height=320):
             st.markdown("### 📊 학습 이력")
             st.markdown(
                 '<div style="height:64px; font-size:18px; line-height:1.55;">'
@@ -995,7 +1023,7 @@ if active_page == "home":
             )
             st.markdown(
                 '<div style="height:64px; color:#8b8f97; font-size:15px; line-height:1.5;">'
-                '서버 DB가 아니라 현재 브라우저에 저장'
+                'Vocabulary · Grammar · Reading 결과를 현재 브라우저에 저장'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -1496,6 +1524,376 @@ if active_page == "vocab":
             st.session_state.recommendation = None
             st.session_state.questions = []
             st.info("취약 단어를 기준으로 다시 AI 문제유형을 추천받아 재시험을 진행해주세요.")
+
+
+# ---------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------
+READING_TYPES = [
+    {"id": "main_idea", "name": "Main Idea / Main Title", "description": "글 전체의 중심 생각이나 가장 적절한 제목 찾기"},
+    {"id": "topic_sentence", "name": "Topic Sentence", "description": "문단의 핵심 내용을 대표하는 문장 찾기"},
+    {"id": "detail", "name": "Factual Information / Detail", "description": "본문에 명시된 세부 정보 확인"},
+    {"id": "inference", "name": "Inference", "description": "본문의 단서를 근거로 직접 쓰이지 않은 내용을 추론"},
+    {"id": "vocab_context", "name": "Vocabulary in Context", "description": "문맥 속 단어·표현의 의미 추론"},
+    {"id": "reference", "name": "Reference", "description": "대명사·지시어가 가리키는 대상 찾기"},
+    {"id": "purpose", "name": "Author / Character Purpose", "description": "글쓴이 또는 등장인물의 의도·목적 파악"},
+    {"id": "sequence", "name": "Sequence / Plot", "description": "사건의 순서와 전개 관계 파악"},
+    {"id": "cause_effect", "name": "Cause & Effect", "description": "원인과 결과의 관계 파악"},
+    {"id": "character", "name": "Character / Motivation", "description": "등장인물의 성격·감정·행동 동기 추론"},
+    {"id": "summary", "name": "Summary", "description": "핵심 내용을 가장 잘 요약한 선택지 찾기"},
+    {"id": "sentence_insertion", "name": "Sentence Insertion / Coherence", "description": "문맥 흐름에 맞는 문장 또는 위치 판단"},
+]
+
+
+def reset_reading():
+    st.session_state.reading_upload_nonce = st.session_state.get("reading_upload_nonce", 0) + 1
+    for k, v in {
+        "reading_analysis": None,
+        "reading_questions": [],
+        "reading_grade": None,
+        "reading_selected_types": [],
+    }.items():
+        st.session_state[k] = v
+
+
+if active_page == "reading":
+    rc1, rc2 = st.columns([5, 1])
+    with rc2:
+        if st.button("＋ 새 학습", key="r_reset", use_container_width=True):
+            reset_reading()
+            st.rerun()
+
+    st.subheader("① 읽은 영어원서 페이지 올리기")
+    st.caption(
+        "오늘 읽은 부분만 사진으로 올리면, 그 내용 안에서만 리딩 문제를 만듭니다. "
+        "여러 페이지를 한 번에 올릴 수 있어요."
+    )
+
+    r_level = st.selectbox("학습자 수준", LEVELS, index=2, key="r_level")
+
+    r_source_mode = st.radio(
+        "자료 선택 방식",
+        ["📁 사진 파일 업로드", "📷 카메라로 촬영"],
+        horizontal=True,
+        key="r_source_mode",
+    )
+
+    r_image_bytes = None
+
+    if r_source_mode == "📁 사진 파일 업로드":
+        r_images = st.file_uploader(
+            "읽은 영어원서 페이지",
+            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+            accept_multiple_files=True,
+            key=f"r_files_{st.session_state.reading_upload_nonce}",
+            help="연속해서 읽은 페이지를 여러 장 선택하세요.",
+        )
+        if r_images:
+            st.caption(f"선택된 사진: {len(r_images)}장")
+            r_image_bytes = combine_uploaded_images(r_images)
+
+    else:
+        st.caption(
+            "📱 휴대폰/태블릿에서는 아래 버튼을 누른 뒤 카메라/사진 찍기를 선택해 "
+            "후면 카메라로 책 페이지를 촬영하세요."
+        )
+        r_camera_images = st.file_uploader(
+            "📷 책 사진 촬영 또는 선택",
+            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+            accept_multiple_files=True,
+            key=f"r_cam_upload_{st.session_state.reading_upload_nonce}",
+            help="여러 페이지를 촬영하거나 선택할 수 있습니다.",
+        )
+        if r_camera_images:
+            st.caption(f"촬영/선택된 사진: {len(r_camera_images)}장")
+            r_image_bytes = combine_uploaded_images(r_camera_images)
+
+    if r_image_bytes is not None:
+        if st.button("🔎 읽은 내용 분석", type="primary", key="r_analyze"):
+            prompt = f"""
+You are a Reading Material Analyzer for a {r_level} Korean learner.
+Analyze ONLY the English book pages visible in the uploaded images.
+
+Important:
+- Do not invent events, facts, characters, motives, or context not supported by the uploaded pages.
+- If a page is partially unreadable, mark uncertainty rather than guessing.
+- Do not reproduce long copyrighted passages. Summarize in your own words.
+- Preserve character names and essential story facts that are clearly visible.
+
+Return JSON only:
+{{
+  "title": "book title if clearly visible, otherwise 읽은 영어원서",
+  "section_summary": "2-4 sentence Korean summary of only the uploaded portion",
+  "characters_or_entities": ["..."],
+  "key_events_or_points": ["..."],
+  "inference_clues": ["brief paraphrased clue 1", "brief paraphrased clue 2"],
+  "readability_note": "clear / partly unclear and short Korean note"
+}}
+"""
+            try:
+                with st.spinner("읽은 페이지의 내용과 문제 출제 근거를 분석하고 있어요..."):
+                    st.session_state.reading_analysis = gemini_json(prompt, r_image_bytes)
+                    st.session_state.reading_questions = []
+                    st.session_state.reading_grade = None
+            except Exception as e:
+                show_ai_error("리딩 자료 분석 오류", e)
+
+    if st.session_state.reading_analysis:
+        ra = st.session_state.reading_analysis
+        st.divider()
+        st.subheader("② 읽은 내용 확인")
+        st.success(ra.get("section_summary", "읽은 부분 분석이 완료됐어요."))
+        if ra.get("readability_note"):
+            st.caption("사진 판독 상태: " + str(ra.get("readability_note")))
+
+        st.subheader("③ 출제 수준 · 난이도 선택")
+        r_style = st.radio(
+            "출제 수준",
+            ["현재 원서 수준", "TOEFL Junior 유형", "TOEFL 유형", "최선어학원 유형"],
+            horizontal=True,
+            key="r_style",
+            help="현재 원서 수준은 업로드한 글 자체의 난이도에 맞추고, 나머지는 해당 시험·학원에서 연습하는 독해 사고방식을 반영합니다.",
+        )
+        r_difficulty = st.radio(
+            "난이도",
+            ["쉬움", "보통", "어려움"],
+            index=1,
+            horizontal=True,
+            key="r_difficulty",
+        )
+        st.caption(
+            f"현재 설정: {r_level} · {r_style} · {r_difficulty}"
+        )
+
+        st.subheader("④ 문제 유형 선택")
+        st.caption("원하는 유형만 골라도 되고 여러 유형을 섞어도 됩니다.")
+
+        r_selected = []
+        cols = st.columns(2)
+        defaults = {"main_idea", "detail", "inference", "vocab_context", "character"}
+        for idx, item in enumerate(READING_TYPES):
+            with cols[idx % 2]:
+                checked = st.checkbox(
+                    f"{item['name']} — {item['description']}",
+                    value=item["id"] in defaults,
+                    key=f"r_type_{item['id']}",
+                )
+                if checked:
+                    r_selected.append(item["id"])
+
+        st.session_state.reading_selected_types = r_selected
+
+        st.subheader("⑤ 문제 수 선택")
+        r_count = st.selectbox(
+            "문제 수",
+            [5, 10, 15, 20],
+            index=0,
+            format_func=lambda x: f"{x}문제",
+            key="r_count",
+        )
+
+        if st.button(
+            "선택한 유형으로 Reading 문제 만들기 →",
+            type="primary",
+            use_container_width=True,
+            disabled=not r_selected,
+            key="r_make_quiz",
+        ):
+            type_map = {x["id"]: x for x in READING_TYPES}
+            chosen = [type_map[x] for x in r_selected if x in type_map]
+
+            prompt = f"""
+You are an English Reading Question Writer for a Korean {r_level} learner.
+
+SOURCE ANALYSIS OF THE UPLOADED PAGES:
+{json.dumps(ra, ensure_ascii=False)}
+
+Learner level: {r_level}
+Practice style: {r_style}
+Difficulty: {r_difficulty}
+Selected question types:
+{json.dumps(chosen, ensure_ascii=False)}
+Question count: {r_count}
+
+Create ORIGINAL reading-comprehension questions based ONLY on the uploaded-page analysis above.
+
+Difficulty calibration:
+- 쉬움: make evidence relatively direct and distractors clearly distinguishable, while still requiring reading comprehension.
+- 보통: use plausible distractors and require careful reading of context and relationships.
+- 어려움: use close distractors, multi-sentence evidence, and deeper inference appropriate to the learner level.
+- 현재 원서 수준: calibrate question language and reasoning primarily to the uploaded material itself while still considering the learner level.
+
+Rules:
+- Never use knowledge from later chapters, the full book, a movie, summaries, or the internet.
+- Every correct answer must be supported by the uploaded portion.
+- Inference questions must be inferable from at least one concrete clue in the uploaded portion.
+- For Main Idea/Main Title, test the whole uploaded section, not one tiny detail.
+- For Topic Sentence, test the central idea of a paragraph/section without requiring a long verbatim quotation.
+- For Vocabulary in Context, use a word/expression clearly supported by the uploaded pages and test its contextual meaning.
+- For TOEFL Junior style: age-appropriate context, clear evidence, plausible distractors.
+- For TOEFL style: emphasize main idea, factual information, inference, vocabulary in context, reference, purpose, summary/coherence as appropriate. This is practice inspired by the skills, not an official TOEFL item.
+- For 최선어학원 유형: create original advanced academy-style reading practice with close distractors and evidence-based inference. Do not copy proprietary questions.
+- All questions must be multiple choice with EXACTLY 5 unique choices.
+- Exactly one choice is correct.
+- Do not include "선택 안 함", "정답 없음", or "none of the above".
+- Store answer as a zero-based integer: A=0, B=1, C=2, D=3, E=4.
+- Spread correct-answer positions across A-E as evenly as practical.
+- Do not quote long passages from the book. Paraphrase when possible.
+- explanation must be in Korean and briefly state the evidence/reason.
+
+Return JSON only:
+{{
+  "questions": [
+    {{
+      "id": 1,
+      "type_id": "inference",
+      "type_name": "Inference",
+      "format": "multiple_choice",
+      "question": "English question",
+      "choices": ["A text","B text","C text","D text","E text"],
+      "answer": 0,
+      "explanation": "Korean explanation grounded in the uploaded portion"
+    }}
+  ]
+}}
+"""
+            try:
+                with st.spinner(f"읽은 내용을 바탕으로 {r_count}문제를 만들고 있어요..."):
+                    rq = gemini_json(prompt).get("questions", [])
+                    rq = ensure_five_choices(rq, study_kind="Reading")
+                    rq = validate_five_choice_questions(rq)
+                    rq = balance_answer_positions(rq)
+                    rq = validate_five_choice_questions(rq)
+
+                    if len(rq) != r_count:
+                        raise ValueError(
+                            f"요청한 {r_count}문제 중 {len(rq)}문제만 생성되었습니다. 다시 문제 만들기를 눌러주세요."
+                        )
+
+                    allowed_types = set(r_selected)
+                    bad_types = [
+                        q.get("id")
+                        for q in rq
+                        if q.get("type_id") not in allowed_types
+                    ]
+                    if bad_types:
+                        raise ValueError(
+                            "선택하지 않은 문제 유형이 포함되어 출제를 중단했습니다. "
+                            "문제 만들기를 다시 눌러주세요."
+                        )
+
+                    st.session_state.reading_questions = rq
+                    st.session_state.reading_grade = None
+                    st.session_state["r_active_level"] = r_level
+                    st.session_state["r_active_style"] = r_style
+                    st.session_state["r_active_difficulty"] = r_difficulty
+            except Exception as e:
+                show_ai_error("Reading 문제 생성 오류", e)
+
+    if st.session_state.reading_questions:
+        st.divider()
+        st.subheader("⑥ Reading Test")
+
+        with st.form("reading_quiz_form"):
+            ranswers = {}
+            for q in st.session_state.reading_questions:
+                st.markdown(
+                    f"**{q.get('id')}. [{q.get('type_name','Reading')}]** "
+                    f"{clean_question_text(q.get('question',''))}"
+                )
+                ranswers[str(q.get("id"))] = radio_choice(
+                    "정답 선택",
+                    q.get("choices", []),
+                    key=f"r_answer_{q.get('id')}",
+                )
+                st.write("")
+
+            rsubmitted = st.form_submit_button("답안 제출 및 채점", type="primary")
+
+        if rsubmitted:
+            rcheck = local_objective_result(
+                st.session_state.reading_questions,
+                ranswers,
+            )
+
+            if rcheck.get("unanswered_ids"):
+                st.warning(
+                    "아직 답을 선택하지 않은 문항이 있어요: "
+                    + ", ".join(map(str, rcheck["unanswered_ids"]))
+                    + "번. 모든 문제에 답한 뒤 채점해주세요."
+                )
+            else:
+                # Reading 객관식은 AI 재호출 없이 코드로 확정 채점.
+                rdetails = []
+                qmap = {str(q.get("id")): q for q in st.session_state.reading_questions}
+                for d in rcheck["details"]:
+                    q = qmap.get(str(d.get("id")), {})
+                    item = dict(d)
+                    item["type_name"] = q.get("type_name", "Reading")
+                    item["explanation"] = q.get("explanation", "")
+                    rdetails.append(item)
+
+                wrong_types = []
+                for d in rdetails:
+                    if not d.get("correct") and d.get("type_name"):
+                        wrong_types.append(d["type_name"])
+                wrong_types = list(dict.fromkeys(wrong_types))
+
+                rg = {
+                    "score": rcheck["score"],
+                    "correct_count": rcheck["correct_count"],
+                    "total": rcheck["objective_count"],
+                    "details": rdetails,
+                    "weak_topics": wrong_types,
+                }
+                st.session_state.reading_grade = rg
+
+                append_history({
+                    "study_type": "Reading",
+                    "material_title": (
+                        (st.session_state.reading_analysis or {}).get("title")
+                        or "읽은 영어원서"
+                    ),
+                    "learner_level": st.session_state.get("r_active_level", r_level),
+                    "test_mode": st.session_state.get("r_active_style", ""),
+                    "difficulty": st.session_state.get("r_active_difficulty", "보통"),
+                    "question_count": rg["total"],
+                    "score": rg["score"],
+                    "weak_items": rg["weak_topics"],
+                    "reading_analysis": st.session_state.reading_analysis,
+                })
+
+    if st.session_state.reading_grade:
+        st.divider()
+        st.subheader("⑦ 채점 결과 · 유형별 오답 확인")
+        rg = st.session_state.reading_grade
+
+        rr1, rr2 = st.columns(2)
+        rr1.metric("점수", f"{rg.get('score', 0)}점")
+        rr2.metric("정답", f"{rg.get('correct_count', 0)} / {rg.get('total', 0)}")
+
+        if rg.get("weak_topics"):
+            st.warning("🎯 다시 연습할 유형: " + ", ".join(rg["weak_topics"]))
+        else:
+            st.success("🎉 이번 Reading Test는 모두 맞았어요.")
+
+        st.markdown("#### 📋 문항별 정답과 근거")
+        for d in rg.get("details", []):
+            with st.container(border=True):
+                st.markdown(
+                    f"{'✅' if d.get('correct') else '❌'} "
+                    f"**{d.get('id')}번 · {d.get('type_name','Reading')}**"
+                )
+                st.write("내 답:", d.get("user_answer", ""))
+                st.write("정답:", d.get("answer", ""))
+                if d.get("explanation"):
+                    st.caption("근거/해설: " + str(d["explanation"]))
+
+        if st.button("🔁 같은 읽은 부분으로 다시 출제", type="primary", key="r_retry"):
+            st.session_state.reading_questions = []
+            st.session_state.reading_grade = None
+            st.rerun()
+
 
 # ---------------------------------------------------------------------
 # Grammar
@@ -2117,3 +2515,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
+st.markdown("<div style=\"text-align:center;color:#9ca3af;font-size:12px;margin-top:30px;\">Powered by Lauren</div>", unsafe_allow_html=True)
