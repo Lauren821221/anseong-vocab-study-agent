@@ -15,6 +15,14 @@ from google.genai import types
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.7-flash,gemini-3.8-flash",
+    ).split(",")
+    if m.strip() and m.strip() != GEMINI_MODEL
+]
 
 try:
     from streamlit_js_eval import streamlit_js_eval
@@ -145,7 +153,7 @@ def extract_json(text):
         raise
 
 
-def _gemini_json_once(prompt, image_bytes=None):
+def _gemini_json_once(prompt, image_bytes=None, model=None):
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -153,7 +161,7 @@ def _gemini_json_once(prompt, image_bytes=None):
     if image_bytes:
         contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
     response = client.models.generate_content(
-        model=GEMINI_MODEL,
+        model=model or GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
@@ -163,45 +171,67 @@ def _gemini_json_once(prompt, image_bytes=None):
 
 
 def gemini_json(prompt, image_bytes=None, max_retries=3):
-    """Gemini JSON call with retry only for temporary service errors.
-    Hard quota exhaustion (free-tier daily/request quota) is NOT retried.
-    """
+    """Gemini JSON call with retry and stable-model fallback for 503 only."""
     import time
+
+    def _flags(error):
+        msg = str(error)
+        low = msg.lower()
+        hard_quota = (
+            "quota exceeded" in low
+            or "free_tier_requests" in low
+            or "generatecontent_free_tier_requests" in low
+            or "perdayperprojectpermodel" in low
+        )
+        unavailable = (
+            "503" in msg
+            or "unavailable" in low
+            or "high demand" in low
+            or "overloaded" in low
+        )
+        transient_rate = (
+            ("429" in msg or "resource_exhausted" in low)
+            and not hard_quota
+            and ("retry" in low or "rate" in low)
+        )
+        return hard_quota, unavailable, transient_rate
+
+    models = [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
     last_error = None
 
-    for attempt in range(max_retries):
-        try:
-            return _gemini_json_once(prompt, image_bytes)
-        except Exception as e:
-            last_error = e
-            msg = str(e)
-            low = msg.lower()
+    for model_index, model_name in enumerate(models):
+        attempts = max(1, max_retries) if model_index == 0 else 1
 
-            hard_quota = (
-                "quota exceeded" in low
-                or "free_tier_requests" in low
-                or "generatecontent_free_tier_requests" in low
-                or "perdayperprojectpermodel" in low
-            )
-            if hard_quota:
+        for attempt in range(attempts):
+            try:
+                return _gemini_json_once(prompt, image_bytes=image_bytes, model=model_name)
+            except Exception as e:
+                last_error = e
+                hard_quota, unavailable, transient_rate = _flags(e)
+
+                # Do not bypass a real account/free-tier quota limit with another model.
+                if hard_quota:
+                    raise
+
+                # 503/high-demand: retry primary, then try the next stable Flash model.
+                if unavailable:
+                    if model_index == 0 and attempt < attempts - 1:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    break
+
+                if transient_rate:
+                    if attempt < attempts - 1:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise
+
+                # Auth/request/model errors are not hidden by fallback.
                 raise
-
-            transient = (
-                "503" in msg
-                or "UNAVAILABLE" in msg
-                or "high demand" in low
-                or (
-                    ("429" in msg or "RESOURCE_EXHAUSTED" in msg)
-                    and ("retry" in low or "rate" in low)
-                )
-            )
-
-            if not transient or attempt == max_retries - 1:
-                raise
-
-            time.sleep(2 * (attempt + 1))
 
     raise last_error
+
+
 def is_gemini_hard_quota_error(error):
     msg = str(error).lower()
     return (
@@ -220,7 +250,16 @@ def show_ai_error(prefix, error):
             "무료 한도가 초기화된 뒤 다시 시도하거나, Gemini API의 결제/쿼터를 늘려야 합니다."
         )
     else:
-        st.error(f"{prefix}: {error}")
+        msg = str(error)
+        low = msg.lower()
+        if "503" in msg or "unavailable" in low or "high demand" in low or "overloaded" in low:
+            st.error(
+                f"{prefix}: 지금 AI 사용량이 많아 연결이 어렵습니다. "
+                "기본 모델과 대체 모델까지 자동으로 시도했지만 모두 응답하지 않았습니다. "
+                "잠시 후 다시 눌러주세요. 업로드한 자료는 그대로 유지됩니다."
+            )
+        else:
+            st.error(f"{prefix}: {error}")
 
 
 
@@ -494,7 +533,7 @@ def grammar_answer_text(q):
         values = [choice_value(c) for c in choices]
         if s in values:
             return s
-        if s.upper() in ["A", "B", "C", "D"]:
+        if s.upper() in ["A", "B", "C", "D", "E"]:
             i = ord(s.upper()) - 65
             if 0 <= i < len(values):
                 return values[i]
@@ -523,7 +562,7 @@ def grammar_question_is_valid(q):
     values = [choice_value(c).strip() for c in choices]
     if any(not v for v in values):
         return False
-    if len(set(values)) != 4:
+    if len(set(values)) != 5:
         return False
 
     answer_text = grammar_answer_text(q).strip()
@@ -560,7 +599,7 @@ STRICT RULES:
 1. Keep the same grammar concept and similar difficulty.
 2. Multiple-choice items must have exactly 5 UNIQUE choices.
 3. There must be exactly ONE best answer.
-4. The correct answer MUST appear among the four choices.
+4. The correct answer MUST appear among the five choices.
 5. "answer" MUST be a ZERO-BASED integer index: A=0, B=1, C=2, D=3, E=4.
 6. If the instruction mentions 밑줄 친/밑줄친/underlined, include "highlight_word".
 7. "highlight_word" must be an exact substring of "question".
@@ -2150,14 +2189,14 @@ Requirements:
 - Test the SAME grammar concepts but use NEW sentences/contexts; do not copy textbook examples.
 - Exactly {g_count} questions.
 - Use selected types as evenly as educationally appropriate.
-- Most questions should be 4-choice multiple choice.
+- Most questions should be 5-choice multiple choice.
 - Sentence transformation/building may use short_answer when useful.
 - Exactly one defensible correct answer for multiple-choice.
 - Include a concise Korean explanation and learning_point for every question.
 - For multiple-choice, spread correct answer positions across A/B/C/D/E.
 - Every multiple-choice item must have exactly 5 UNIQUE choices.
 - There must be exactly ONE best answer.
-- The correct answer MUST appear among the four choices.
+- The correct answer MUST appear among the five choices.
 - "answer" MUST be a zero-based integer index (A=0, B=1, C=2, D=3, E=4).
 - IMPORTANT: If the Korean instruction says "밑줄 친/밑줄친" or the English instruction says "underlined",
   you MUST put the exact target word or phrase in "highlight_word".
@@ -2446,14 +2485,18 @@ Difficulty: {st.session_state.get("g_active_difficulty","")}
 Create exactly {retry_count} NEW questions.
 Never repeat previous sentences. Use different situations.
 Focus on transfer of the weak grammar concepts.
-Use 4-choice questions where possible and balance correct positions.
+Use 5-choice questions where possible and balance correct positions.
 Return the same JSON question array format used before.
 """
                 with st.spinner("취약 문법 중심의 새 문제를 만들고 있어요..."):
                     qs = gemini_json(prompt)
                     if isinstance(qs, dict):
                         qs = qs.get("questions", [])
-                    st.session_state.grammar_questions = balance_answer_positions(qs)
+                    qs = ensure_five_choices(qs, study_kind="Grammar")
+                    qs = validate_five_choice_questions(qs)
+                    qs = balance_answer_positions(qs)
+                    qs = validate_five_choice_questions(qs)
+                    st.session_state.grammar_questions = qs
                     st.session_state.grammar_grade = None
                     st.rerun()
             except Exception as e:
